@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 import tempfile
@@ -108,6 +109,52 @@ class CoreTest(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "OPENAI_API_KEY"),
         ):
             OpenAIGrader(HLE, model="test-grader-model")
+
+    def test_openai_grader_configures_base_url(self) -> None:
+        client = MagicMock()
+        with (
+            patch.dict(
+                os.environ,
+                {"OPENAI_API_KEY": "test-key"},
+                clear=True,
+            ),
+            patch(
+                "bench_engine.core.runner.AsyncOpenAI",
+                return_value=client,
+            ) as constructor,
+        ):
+            grader = OpenAIGrader(
+                HLE,
+                model="test-grader-model",
+                base_url="https://example.test/v1",
+            )
+
+        self.assertIs(grader.client, client)
+        constructor.assert_called_once_with(base_url="https://example.test/v1")
+
+    def test_cli_loads_openai_configuration_from_dotenv(self) -> None:
+        from bench_engine import cli
+
+        with tempfile.TemporaryDirectory() as directory:
+            original_directory = Path.cwd()
+            Path(directory, ".env").write_text(
+                "OPENAI_API_KEY=dotenv-key\n"
+                "OPENAI_GRADER_MODEL=dotenv-model\n"
+                "OPENAI_BASE_URL=https://dotenv.test/v1\n",
+                encoding="utf-8",
+            )
+            os.chdir(directory)
+            try:
+                with patch.dict(os.environ, {}, clear=True):
+                    importlib.reload(cli)
+
+                    self.assertEqual(os.environ["OPENAI_API_KEY"], "dotenv-key")
+                    self.assertEqual(os.environ["OPENAI_GRADER_MODEL"], "dotenv-model")
+                    self.assertEqual(
+                        os.environ["OPENAI_BASE_URL"], "https://dotenv.test/v1"
+                    )
+            finally:
+                os.chdir(original_directory)
 
     def test_hle_prompt_lists_task_image_asset(self) -> None:
         asset = TaskAsset(

@@ -34,13 +34,18 @@ class OpenAIGrader:
         benchmark: Benchmark,
         *,
         model: str,
+        base_url: str | None = None,
         client: AsyncOpenAI | None = None,
     ) -> None:
         if client is None and not os.environ.get("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY is not set")
+        if base_url is not None and not base_url.strip():
+            raise ValueError("OpenAI grader base URL must be non-blank")
         self.benchmark = benchmark
         self.model = model
-        self.client = client or AsyncOpenAI()
+        self.client = client or (
+            AsyncOpenAI(base_url=base_url) if base_url else AsyncOpenAI()
+        )
 
     async def grade(
         self,

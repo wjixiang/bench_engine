@@ -15,6 +15,7 @@ from typing import Annotated
 
 import polars as pl
 import typer
+from dotenv import load_dotenv
 
 from bench_engine.benchmarks.hle import HLE
 from bench_engine.benchmarks.lab_bench import LAB_BENCH, LAB_BENCH_DATASETS
@@ -34,6 +35,8 @@ from bench_engine.core.runner import (
 )
 from bench_engine.solvers.autonomics_solver import DEFAULT_TUI, AutonomicsTuiSolver
 from bench_engine.solvers.custom import CustomCommandSolver
+
+load_dotenv(Path(".env"))
 
 app = typer.Typer(
     help="Run and score local benchmark datasets.",
@@ -186,6 +189,13 @@ def evaluate(
             help="OpenAI model used by the native LLM grader.",
         ),
     ] = None,
+    grader_base_url: Annotated[
+        str | None,
+        typer.Option(
+            "--grader-base-url",
+            help="OpenAI-compatible API base URL for the native LLM grader.",
+        ),
+    ] = None,
     jobs: Annotated[int, typer.Option(min=1, max=32)] = 1,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     summary: Annotated[
@@ -213,6 +223,7 @@ def evaluate(
     if grader_mode not in {"exact", "model"}:
         raise typer.BadParameter("--grader must be 'exact' or 'model'")
     selected_grader_model = grader_model or os.environ.get("OPENAI_GRADER_MODEL")
+    selected_grader_base_url = grader_base_url or os.environ.get("OPENAI_BASE_URL")
     if grader_mode == "model" and not selected_grader_model:
         raise typer.BadParameter(
             "--grader model requires --grader-model or OPENAI_GRADER_MODEL"
@@ -302,6 +313,7 @@ def evaluate(
             engine_grader = OpenAIGrader(
                 base_benchmark,
                 model=selected_grader_model,
+                base_url=selected_grader_base_url,
             )
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc

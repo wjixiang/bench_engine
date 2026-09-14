@@ -167,7 +167,9 @@ uv run bench-engine evaluate \
 
 模型评分使用内置 OpenAI SDK 客户端，直接调用 OpenAI Responses API，不会再复用
 当前被测 solver。模型名也可通过 `OPENAI_GRADER_MODEL` 配置；API 凭证使用
-`OPENAI_API_KEY`。
+`OPENAI_API_KEY`。自定义 OpenAI-compatible endpoint 可用 `--grader-base-url`
+或 `OPENAI_BASE_URL` 配置。这些变量会自动从当前目录的 `.env` 读取，已导出的
+环境变量优先。
 
 中断后可用 `--resume --output runs/biomedical.jsonl` 续跑。结果为 JSONL，
 旁边生成 `.summary.json`。日志只包含 ID、耗时、返回码和元数据，不包含题目、图像、
