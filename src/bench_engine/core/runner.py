@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Sequence
@@ -11,12 +12,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from openai import AsyncOpenAI, OpenAIError
+
 from bench_engine.benchmarks.base import Benchmark
 from bench_engine.core.grading import Grade, grade_verdict
 from bench_engine.core.interfaces import (
     Example,
     Grader,
-    RawSolver,
     Solver,
     SolverResult,
 )
@@ -24,12 +26,21 @@ from bench_engine.core.interfaces import (
 RESULT_SCHEMA = 2
 
 
-class ModelGrader:
-    """Grade a response with an isolated auxiliary model turn."""
+class OpenAIGrader:
+    """Grade a response with a native OpenAI Responses API call."""
 
-    def __init__(self, benchmark: Benchmark, solver: RawSolver) -> None:
+    def __init__(
+        self,
+        benchmark: Benchmark,
+        *,
+        model: str,
+        client: AsyncOpenAI | None = None,
+    ) -> None:
+        if client is None and not os.environ.get("OPENAI_API_KEY"):
+            raise ValueError("OPENAI_API_KEY is not set")
         self.benchmark = benchmark
-        self.solver = solver
+        self.model = model
+        self.client = client or AsyncOpenAI()
 
     async def grade(
         self,
@@ -39,27 +50,22 @@ class ModelGrader:
     ) -> Grade:
         del benchmark
         prompt = self.benchmark.grader_prompt(example, response)
-        result = await self.solver.solve_raw(
-            prompt,
-            task_id=f"grade:{example.id}",
-            phase="grade",
-            answer_type=example.answer_type,
-            category=example.category,
-            has_image=False,
-        )
-        if not result.ok:
-            detail = result.error or "model grader failed"
-            if result.stderr_tail:
-                detail += f"; {result.stderr_tail[-500:]}"
-            return Grade(None, None, "model", detail)
+        try:
+            result = await self.client.responses.create(
+                model=self.model,
+                input=prompt,
+            )
+        except OpenAIError as exc:
+            return Grade(None, None, "model", f"OpenAI grader failed: {exc}")
 
-        verdict = grade_verdict(result.response)
+        text = result.output_text
+        verdict = grade_verdict(text) if text else None
         if verdict is None:
             return Grade(
                 None,
                 None,
                 "model",
-                f"could not parse grader verdict: {result.response[-500:]}",
+                f"could not parse grader verdict: {text[-500:] if text else '<empty>'}",
             )
         extracted = self.benchmark.extract(response, example)
         return Grade(verdict, extracted, "model")

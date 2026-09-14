@@ -26,7 +26,7 @@ from bench_engine.core.data import (
 )
 from bench_engine.core.interfaces import Example
 from bench_engine.core.runner import (
-    ModelGrader,
+    OpenAIGrader,
     completed_ids,
     evaluate_examples,
     read_results,
@@ -179,7 +179,13 @@ def evaluate(
         str,
         typer.Option("--grader", help="Exact deterministic grading or model grading."),
     ] = "exact",
-    grader_model: Annotated[str | None, typer.Option("--grader-model")] = None,
+    grader_model: Annotated[
+        str | None,
+        typer.Option(
+            "--grader-model",
+            help="OpenAI model used by the native LLM grader.",
+        ),
+    ] = None,
     jobs: Annotated[int, typer.Option(min=1, max=32)] = 1,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     summary: Annotated[
@@ -206,9 +212,10 @@ def evaluate(
         raise typer.BadParameter("--data requires --benchmark hle-all")
     if grader_mode not in {"exact", "model"}:
         raise typer.BadParameter("--grader must be 'exact' or 'model'")
-    if grader_mode == "model" and solver_command is not None:
+    selected_grader_model = grader_model or os.environ.get("OPENAI_GRADER_MODEL")
+    if grader_mode == "model" and not selected_grader_model:
         raise typer.BadParameter(
-            "TUI model grading is not available with --solver-command; use exact"
+            "--grader model requires --grader-model or OPENAI_GRADER_MODEL"
         )
     if not quiet:
         logging.basicConfig(
@@ -285,13 +292,26 @@ def evaluate(
         else base_benchmark
     )
 
+    engine_grader = None
+    if grader_mode == "model":
+        if selected_grader_model is None:
+            raise typer.BadParameter(
+                "--grader model requires --grader-model or OPENAI_GRADER_MODEL"
+            )
+        try:
+            engine_grader = OpenAIGrader(
+                base_benchmark,
+                model=selected_grader_model,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
     if solver_command is not None:
         try:
             solver = CustomCommandSolver(solver_command, timeout)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         solver_kind = f"command:{shlex.join(solver.argv)}"
-        engine_grader = None
     else:
         executable = _default_tui(tui)
         solver = AutonomicsTuiSolver(
@@ -301,17 +321,6 @@ def evaluate(
             profile=profile,
         )
         solver_kind = f"tui:{solver.executable}"
-        engine_grader = None
-        if grader_mode == "model":
-            engine_grader = ModelGrader(
-                base_benchmark,
-                AutonomicsTuiSolver(
-                    executable,
-                    min(timeout, 600.0),
-                    model=grader_model,
-                    profile=profile,
-                ),
-            )
 
     try:
         skip = completed_ids(output) if resume and output.exists() else set()

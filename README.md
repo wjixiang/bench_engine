@@ -157,12 +157,17 @@ TUI transport 目前只发送文本。默认不会把图像 data URI 放进 prom
 自由答案建议使用二次模型评分：
 
 ```bash
+export OPENAI_API_KEY=...
 uv run bench-engine evaluate \
   --benchmark hle-biomedical \
   --grader model \
-  --grader-model provider:grader-model \
+  --grader-model <openai-model> \
   --output runs/model-graded.jsonl
 ```
+
+模型评分使用内置 OpenAI SDK 客户端，直接调用 OpenAI Responses API，不会再复用
+当前被测 solver。模型名也可通过 `OPENAI_GRADER_MODEL` 配置；API 凭证使用
+`OPENAI_API_KEY`。
 
 中断后可用 `--resume --output runs/biomedical.jsonl` 续跑。结果为 JSONL，
 旁边生成 `.summary.json`。日志只包含 ID、耗时、返回码和元数据，不包含题目、图像、
