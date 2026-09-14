@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from bench_engine.benchmarks.base import Benchmark
     from bench_engine.core.grading import Grade
+
+
+@dataclass(frozen=True)
+class TaskAsset:
+    """An input file associated with a benchmark task."""
+
+    name: str
+    path: Path
+    media_type: str = "application/octet-stream"
+    role: str = "input"
+
+    def payload(self) -> dict[str, str]:
+        """Return the JSON-serializable metadata passed to external solvers."""
+        return {
+            "name": self.name,
+            "path": str(self.path),
+            "media_type": self.media_type,
+            "role": self.role,
+        }
 
 
 @dataclass(frozen=True)
@@ -20,16 +40,21 @@ class Example:
     target: str
     answer_type: str
     category: str
+    task_path: Path | None = None
+    assets: tuple[TaskAsset, ...] = ()
 
-    def payload(self) -> dict[str, str]:
+    def payload(self) -> dict[str, Any]:
         """Return the JSON-serializable item passed to external solvers."""
-        return {
+        payload: dict[str, Any] = {
             "id": self.id,
             "question": self.question,
             "image": self.image,
             "answer_type": self.answer_type,
             "category": self.category,
         }
+        if self.assets:
+            payload["data"] = [asset.payload() for asset in self.assets]
+        return payload
 
 
 @dataclass(frozen=True)
@@ -57,13 +82,22 @@ class Grader(Protocol):
 
     async def grade(
         self,
-        benchmark: "Benchmark",
+        benchmark: Benchmark,
         example: Example,
         response: str,
-    ) -> "Grade": ...
+    ) -> Grade: ...
 
 
 class RawSolver(Protocol):
     """A solver capable of grading or other auxiliary prompts."""
 
-    async def solve_raw(self, prompt: str, **kwargs: Any) -> SolverResult: ...
+    async def solve_raw(
+        self,
+        prompt: str,
+        *,
+        task_id: str,
+        phase: str,
+        answer_type: str | None,
+        category: str | None,
+        has_image: bool,
+    ) -> SolverResult: ...

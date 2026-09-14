@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import shlex
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -15,8 +16,15 @@ from typing import Annotated
 import polars as pl
 import typer
 
-from bench_engine.benchmarks.hle import HLE, load_hle_examples
-from bench_engine.core.data import load_examples
+from bench_engine.benchmarks.hle import HLE
+from bench_engine.benchmarks.lab_bench import LAB_BENCH, LAB_BENCH_DATASETS
+from bench_engine.core.data import (
+    DatasetInfo,
+    dataset_path,
+    inspect_dataset,
+    load_examples,
+)
+from bench_engine.core.interfaces import Example
 from bench_engine.core.runner import (
     ModelGrader,
     completed_ids,
@@ -24,13 +32,17 @@ from bench_engine.core.runner import (
     read_results,
     summarize,
 )
+from bench_engine.solvers.autonomics_solver import DEFAULT_TUI, AutonomicsTuiSolver
 from bench_engine.solvers.custom import CustomCommandSolver
-from bench_engine.solvers.tui import DEFAULT_TUI, AutonomicsTuiSolver
 
 app = typer.Typer(
     help="Run and score local benchmark datasets.",
     no_args_is_help=True,
 )
+
+OMICOS_BIOMNIBENCH_DATASETS = {
+    "omicos-biomnibench": "omicos_biomnibench:biomnibench_da",
+}
 
 
 def _default_output() -> Path:
@@ -50,7 +62,16 @@ def _default_tui(override: Path | None) -> Path:
 @app.command()
 def datasets() -> None:
     """List registered benchmark datasets and row counts."""
-    for info in load_hle_datasets():
+    infos = [
+        *load_hle_datasets(),
+    ]
+    for alias, dataset_name in LAB_BENCH_DATASETS.items():
+        path = dataset_path(dataset_name)
+        infos.append(DatasetInfo(alias, path, int(inspect_dataset(path).rows)))
+    for alias, dataset_name in OMICOS_BIOMNIBENCH_DATASETS.items():
+        path = dataset_path(dataset_name)
+        infos.append(DatasetInfo(alias, path, int(inspect_dataset(path).rows)))
+    for info in infos:
         typer.echo(f"{info.name}\t{info.rows}\t{info.path}")
 
 
@@ -60,6 +81,42 @@ def load_hle_datasets():
     return hle_datasets()
 
 
+def _load_lab_bench_examples(
+    benchmark: str,
+    *,
+    offset: int,
+    limit: int | None,
+    ids: list[str] | None,
+    answer_type: str | None,
+    category: str | None,
+    shuffle: bool,
+    seed: int,
+) -> list[Example]:
+    dataset_names = (
+        (LAB_BENCH_DATASETS[benchmark],)
+        if benchmark in LAB_BENCH_DATASETS
+        else tuple(LAB_BENCH_DATASETS.values())
+    )
+    examples: list[Example] = []
+    for dataset_name in dataset_names:
+        examples.extend(
+            load_examples(
+                dataset_path(dataset_name),
+                offset=0,
+                limit=None,
+                ids=ids,
+                answer_type=answer_type,
+                category=category,
+                shuffle=False,
+                seed=seed,
+            )
+        )
+    if shuffle:
+        random.Random(seed).shuffle(examples)
+    end = None if limit is None else offset + limit
+    return examples[offset:end]
+
+
 @app.command()
 def evaluate(
     benchmark: Annotated[
@@ -67,8 +124,8 @@ def evaluate(
         typer.Option(
             "--benchmark",
             "-b",
-            help="Registered benchmark: hle-all, hle-biomedical, or "
-            "hle-biomedical-visual.",
+            help="Registered benchmark: hle-all, hle-biomedical, "
+            "hle-biomedical-visual, lab-bench, or a lab-<category> dataset.",
         ),
     ] = "hle-biomedical",
     data: Annotated[
@@ -122,9 +179,7 @@ def evaluate(
         str,
         typer.Option("--grader", help="Exact deterministic grading or model grading."),
     ] = "exact",
-    grader_model: Annotated[
-        str | None, typer.Option("--grader-model")
-    ] = None,
+    grader_model: Annotated[str | None, typer.Option("--grader-model")] = None,
     jobs: Annotated[int, typer.Option(min=1, max=32)] = 1,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
     summary: Annotated[
@@ -137,7 +192,9 @@ def evaluate(
     ] = False,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Print prompts as JSONL without invoking a model."),
+        typer.Option(
+            "--dry-run", help="Print prompts as JSONL without invoking a model."
+        ),
     ] = False,
     quiet: Annotated[
         bool,
@@ -161,6 +218,7 @@ def evaluate(
             force=True,
         )
 
+    base_benchmark = HLE
     try:
         if data is not None:
             examples = load_examples(
@@ -174,26 +232,40 @@ def evaluate(
                 seed=seed,
             )
         else:
-            names = {
-                "hle-all": "all",
-                "hle-biomedical": "biomedical",
-                "hle-biomedical-visual": "biomedical_visual",
+            hle_benchmarks = {
+                "hle-all": ("hle:full", HLE),
+                "hle-biomedical": ("hle:biomedical", HLE),
+                "hle-biomedical-visual": ("hle:biomedical_visual", HLE),
             }
-            if benchmark not in names:
-                choices = ", ".join(names)
+            choices = [*hle_benchmarks, "lab-bench", *LAB_BENCH_DATASETS]
+            if benchmark in hle_benchmarks:
+                dataset_name, base_benchmark = hle_benchmarks[benchmark]
+                examples = load_examples(
+                    dataset_path(dataset_name),
+                    offset=offset,
+                    limit=limit,
+                    ids=question_id,
+                    answer_type=answer_type,
+                    category=category,
+                    shuffle=shuffle,
+                    seed=seed,
+                )
+            elif benchmark == "lab-bench" or benchmark in LAB_BENCH_DATASETS:
+                base_benchmark = LAB_BENCH
+                examples = _load_lab_bench_examples(
+                    benchmark,
+                    offset=offset,
+                    limit=limit,
+                    ids=question_id,
+                    answer_type=answer_type,
+                    category=category,
+                    shuffle=shuffle,
+                    seed=seed,
+                )
+            else:
                 raise ValueError(
                     f"unknown benchmark {benchmark!r}; choose one of: {choices}"
                 )
-            examples = load_hle_examples(
-                names[benchmark],
-                offset=offset,
-                limit=limit,
-                ids=question_id,
-                answer_type=answer_type,
-                category=category,
-                shuffle=shuffle,
-                seed=seed,
-            )
     except (OSError, ValueError, pl.exceptions.PolarsError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -208,7 +280,9 @@ def evaluate(
         )
 
     run_benchmark = (
-        replace(HLE, include_image_uri=True) if include_image_uri else HLE
+        replace(base_benchmark, include_image_uri=True)
+        if include_image_uri
+        else base_benchmark
     )
 
     if solver_command is not None:
@@ -230,7 +304,7 @@ def evaluate(
         engine_grader = None
         if grader_mode == "model":
             engine_grader = ModelGrader(
-                HLE,
+                base_benchmark,
                 AutonomicsTuiSolver(
                     executable,
                     min(timeout, 600.0),

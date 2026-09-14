@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from bench_engine.solvers.custom import CustomCommandSolver
-from bench_engine.solvers.tui import AutonomicsTuiSolver
+from bench_engine.solvers.autonomics_solver import AutonomicsTuiSolver
 
 from tests.test_core import EXAMPLE
 
@@ -23,14 +23,16 @@ class SolverTest(unittest.TestCase):
         solver = CustomCommandSolver("python -c 'import time; time.sleep(2)'", timeout=0.01)
         result = asyncio.run(solver.solve(EXAMPLE, "prompt"))
         self.assertFalse(result.ok)
-        self.assertIn("timed out", result.error)
+        error = result.error
+        self.assertTrue(error is not None and "timed out" in error)
 
-    def test_tui_missing_executable(self) -> None:
+    def test_autonomics_missing_executable(self) -> None:
         solver = AutonomicsTuiSolver(Path("/does-not-exist/tui"), timeout=1)
-        with self.assertLogs("bench_engine.solvers.tui", level="INFO"):
+        with self.assertLogs("bench_engine.solvers.autonomics_solver", level="INFO"):
             result = asyncio.run(solver.solve(EXAMPLE, "prompt"))
         self.assertFalse(result.ok)
-        self.assertIn("does not exist", result.error)
+        error = result.error
+        self.assertTrue(error is not None and "does not exist" in error)
 
 
 if __name__ == "__main__":

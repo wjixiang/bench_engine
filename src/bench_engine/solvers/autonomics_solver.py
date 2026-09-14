@@ -43,7 +43,9 @@ class AutonomicsTuiSolver(Solver):
             phase="answer",
             answer_type=example.answer_type,
             category=example.category,
-            has_image=bool(example.image),
+            has_image=bool(
+                example.image or any(asset.role == "image" for asset in example.assets)
+            ),
         )
 
     async def solve_raw(
@@ -155,7 +157,7 @@ class AutonomicsTuiSolver(Solver):
             manifest_data: dict[str, Any] = {}
             try:
                 manifest_data = json.loads(manifest.read_text("utf-8"))
-            except (OSError, json.JSONDecodeError):
+            except OSError, json.JSONDecodeError:
                 pass
             session_id = manifest_data.get("session_id") or session_id
             model = manifest_data.get("model") or model
@@ -191,7 +193,13 @@ class AutonomicsTuiSolver(Solver):
                 usage=usage,
                 stderr_tail=_tail(stderr_text),
             )
-            self._log_end(task_id, phase, started, result, len(response))
+            self._log_end(
+                task_id,
+                phase,
+                started,
+                result,
+                response_chars=len(response),
+            )
             return result
 
     def _log_start_failed(

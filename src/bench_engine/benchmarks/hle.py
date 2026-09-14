@@ -5,11 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from bench_engine.core.data import DatasetInfo, dataset_path, inspect_dataset, load_examples
+from bench_engine.core.data import (
+    DatasetInfo,
+    dataset_path,
+    inspect_dataset,
+    load_examples,
+)
 from bench_engine.core.grading import Grade, exact_grade, extract_answer
 from bench_engine.core.interfaces import Example
 
 MULTIPLE_CHOICE = "multipleChoice"
+
+
+def _has_image(example: Example) -> bool:
+    return bool(example.image or any(asset.role == "image" for asset in example.assets))
 
 
 @dataclass(frozen=True)
@@ -32,6 +41,11 @@ class HLEBenchmark:
         )
         if example.image and self.include_image_uri:
             prompt += f"Image data URI:\n{example.image}\n\n"
+        elif _has_image(example) and self.include_image_uri:
+            image_paths = "\n".join(
+                f"- {asset.path}" for asset in example.assets if asset.role == "image"
+            )
+            prompt += f"Image files:\n{image_paths}\n\n"
         return (
             prompt
             + f"{instruction}\n"
@@ -74,7 +88,7 @@ HLE = HLEBenchmark()
 def resolve_path(name: str, override: Path | None = None) -> Path:
     if override is not None:
         path = override.expanduser().resolve()
-        if not path.is_file():
+        if not path.exists():
             raise FileNotFoundError(f"dataset does not exist: {path}")
         return path
     if name == "all":
