@@ -13,18 +13,24 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class TaskAsset:
-    """An input file associated with a benchmark task."""
+    """An input file or directory associated with a benchmark task."""
 
     name: str
     path: Path
     media_type: str = "application/octet-stream"
     role: str = "input"
+    relative_path: str | None = None
 
-    def payload(self) -> dict[str, str]:
+    def payload(self, data_mount_path: Path | None = None) -> dict[str, str]:
         """Return the JSON-serializable metadata passed to external solvers."""
+        path = (
+            data_mount_path / (self.relative_path or self.name)
+            if data_mount_path is not None
+            else self.path
+        )
         return {
             "name": self.name,
-            "path": str(self.path),
+            "path": str(path),
             "media_type": self.media_type,
             "role": self.role,
         }
@@ -43,7 +49,7 @@ class Example:
     task_path: Path | None = None
     assets: tuple[TaskAsset, ...] = ()
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self, data_mount_path: Path | None = None) -> dict[str, Any]:
         """Return the JSON-serializable item passed to external solvers."""
         payload: dict[str, Any] = {
             "id": self.id,
@@ -53,7 +59,7 @@ class Example:
             "category": self.category,
         }
         if self.assets:
-            payload["data"] = [asset.payload() for asset in self.assets]
+            payload["data"] = [asset.payload(data_mount_path) for asset in self.assets]
         return payload
 
 
@@ -74,7 +80,13 @@ class SolverResult:
 class Solver(Protocol):
     """A backend that can answer one benchmark prompt."""
 
-    async def solve(self, example: Example, prompt: str) -> SolverResult: ...
+    async def solve(
+        self,
+        example: Example,
+        prompt: str,
+        *,
+        data_mount_path: Path | None = None,
+    ) -> SolverResult: ...
 
 
 class Grader(Protocol):

@@ -316,8 +316,8 @@ def _load_task_package(task_path: Path) -> Example:
             raise ValueError(
                 f"task data path must stay under data/: {relative_path!r}"
             ) from exc
-        if not asset_path.is_file():
-            raise ValueError(f"task data file does not exist: {asset_path}")
+        if not asset_path.exists():
+            raise ValueError(f"task data asset does not exist: {asset_path}")
         media_type = entry.get("media_type", "application/octet-stream")
         role = entry.get("role", "input")
         if not isinstance(media_type, str) or not media_type.strip():
@@ -326,7 +326,15 @@ def _load_task_package(task_path: Path) -> Example:
             )
         if not isinstance(role, str) or not role.strip():
             raise ValueError(f"task data[{index}].role must be a non-blank string")
-        assets.append(TaskAsset(name, asset_path, media_type, role))
+        assets.append(
+            TaskAsset(
+                name,
+                asset_path,
+                media_type,
+                role,
+                relative_path=relative_path,
+            )
+        )
 
     return Example(
         id=task_id,

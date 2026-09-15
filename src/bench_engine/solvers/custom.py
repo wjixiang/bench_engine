@@ -7,8 +7,10 @@ import json
 import logging
 import shlex
 import time
+from pathlib import Path
 
 from bench_engine.core.interfaces import Example, Solver, SolverResult
+from bench_engine.solvers.mounting import mount_example_data
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +22,7 @@ def _tail(text: str, limit: int = 4000) -> str:
 def _json_or_text(text: str) -> str:
     try:
         value = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return text
     if isinstance(value, dict):
         for key in ("answer", "response", "final_message", "output"):
@@ -37,9 +39,21 @@ class CustomCommandSolver(Solver):
         self.timeout = timeout
         if not self.argv:
             raise ValueError("solver command is empty")
+        self.data_mount_path: Path | None = None
 
-    async def solve(self, example: Example, prompt: str) -> SolverResult:
+    async def solve(
+        self,
+        example: Example,
+        prompt: str,
+        *,
+        data_mount_path: Path | None = None,
+    ) -> SolverResult:
         del prompt
+        self.data_mount_path = data_mount_path
+        try:
+            mounted_path = mount_example_data(example, data_mount_path)
+        except (OSError, ValueError) as exc:
+            return SolverResult("", False, error=f"failed to mount task data: {exc}")
         started = time.perf_counter()
         logger.info(
             "solver.start backend=custom-command id=%s command=%r "
@@ -50,10 +64,11 @@ class CustomCommandSolver(Solver):
             len(example.image),
             example.answer_type,
         )
-        payload = json.dumps(example.payload(), ensure_ascii=False)
+        payload = json.dumps(example.payload(mounted_path), ensure_ascii=False)
         try:
             process = await asyncio.create_subprocess_exec(
                 *self.argv,
+                cwd=mounted_path,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

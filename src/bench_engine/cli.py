@@ -178,6 +178,14 @@ def evaluate(
         ),
     ] = False,
     timeout: Annotated[float, typer.Option(min=1)] = 1800.0,
+    data_mount_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-mount-path",
+            "--data-mount",
+            help="Mount task data below this directory for each solver process.",
+        ),
+    ] = None,
     grader_mode: Annotated[
         str,
         typer.Option("--grader", help="Exact deterministic grading or model grading."),
@@ -347,6 +355,11 @@ def evaluate(
                 jobs=jobs,
                 skip_ids=skip,
                 dry_run=dry_run,
+                data_mount_path=(
+                    data_mount_path.expanduser().resolve()
+                    if data_mount_path is not None
+                    else None
+                ),
             )
         )
         all_records = read_results(output)

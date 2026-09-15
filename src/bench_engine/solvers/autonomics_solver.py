@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from bench_engine.core.interfaces import Example, Solver, SolverResult
+from bench_engine.solvers.mounting import mount_example_data
 
 DEFAULT_TUI = Path("/mnt/projects/autonomics_projects/autonomics/target/release/tui")
 logger = logging.getLogger(__name__)
@@ -35,8 +36,25 @@ class AutonomicsTuiSolver(Solver):
         self.timeout = timeout
         self.model = model
         self.profile = profile
+        self.data_mount_path: Path | None = None
 
-    async def solve(self, example: Example, prompt: str) -> SolverResult:
+    async def solve(
+        self,
+        example: Example,
+        prompt: str,
+        *,
+        data_mount_path: Path | None = None,
+    ) -> SolverResult:
+        self.data_mount_path = data_mount_path
+        try:
+            mounted_path = mount_example_data(example, data_mount_path)
+        except (OSError, ValueError) as exc:
+            return SolverResult("", False, error=f"failed to mount task data: {exc}")
+        if mounted_path is not None:
+            prompt += (
+                f"\n\nMounted task workspace: {mounted_path}\n"
+                f"Input files, when present, are under: {mounted_path / 'data'}"
+            )
         return await self.solve_raw(
             prompt,
             task_id=example.id,
@@ -46,6 +64,7 @@ class AutonomicsTuiSolver(Solver):
             has_image=bool(
                 example.image or any(asset.role == "image" for asset in example.assets)
             ),
+            working_directory=mounted_path,
         )
 
     async def solve_raw(
@@ -57,6 +76,7 @@ class AutonomicsTuiSolver(Solver):
         answer_type: str | None = None,
         category: str | None = None,
         has_image: bool = False,
+        working_directory: Path | None = None,
     ) -> SolverResult:
         started = time.perf_counter()
         logger.info(
@@ -107,6 +127,7 @@ class AutonomicsTuiSolver(Solver):
             try:
                 process = await asyncio.create_subprocess_exec(
                     *argv,
+                    cwd=working_directory,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,

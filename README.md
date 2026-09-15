@@ -44,6 +44,7 @@ uv run bench-engine evaluate \
 ```bash
 uv run bench-engine evaluate --benchmark hle-all --limit 10 \
   --solver-command 'python my_solver.py' \
+  --data-mount-path runs/solver-data \
   --output runs/custom.jsonl
 ```
 
@@ -120,8 +121,11 @@ datasets/<benchmark>/<dataset>/<task-id>/
 }
 ```
 
-`data[].path` 必须是相对 task 文件夹且位于 `data/` 下的文件路径。外部 solver
-收到的是解析后的绝对路径；答案和评分信息不会进入 solver payload。
+`data[].path` 必须是相对 task 文件夹且位于 `data/` 下的文件或目录路径。答案和
+评分信息不会进入 solver payload。传入 `--data-mount-path` 后，runner 会把该路径
+传给 solver；solver 内部为每个 task 创建 `<mount-root>/<task-id>/`，把 assets 按
+相对路径符号链接到其中，并将该目录作为 solver 子进程的工作目录。外部 solver
+payload 中的 `data[].path` 也会映射到挂载后的路径；未指定挂载路径时保留源路径。
 
 HLE 也已迁移为 task package：
 

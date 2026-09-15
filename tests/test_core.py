@@ -37,9 +37,16 @@ MC_EXAMPLE = Example(
 
 
 class StaticSolver(Solver):
-    async def solve(self, example: Example, prompt: str) -> SolverResult:
+    async def solve(
+        self,
+        example: Example,
+        prompt: str,
+        *,
+        data_mount_path: Path | None = None,
+    ) -> SolverResult:
         self.example = example
         self.prompt = prompt
+        self.data_mount_path = data_mount_path
         return SolverResult("work\nAnswer: 4", True)
 
 
@@ -64,6 +71,7 @@ class CoreTest(unittest.TestCase):
                     solver_kind="test",
                     output=output,
                     grader=None,
+                    data_mount_path=Path(directory) / "data-mounts",
                 )
             )
             self.assertIn("Answer: <answer>", solver.prompt)
@@ -71,6 +79,7 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(record["benchmark"], "hle")
             self.assertTrue(record["correct"])
         self.assertEqual(summarize(records)["accuracy"], 1.0)
+        self.assertIsNotNone(solver.data_mount_path)
 
     def test_openai_grader_uses_native_responses_api(self) -> None:
         client = MagicMock()

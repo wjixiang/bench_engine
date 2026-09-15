@@ -110,9 +110,10 @@ class DataTest(unittest.TestCase):
             self.assertEqual(len(example.assets), 1)
             self.assertEqual(example.assets[0].name, "input")
             self.assertTrue(example.assets[0].path.is_file())
-            payload = example.payload()
-            self.assertEqual(payload["data"][0]["name"], "input")
-            self.assertIn("path", payload["data"][0])
+        payload = example.payload()
+        self.assertEqual(payload["data"][0]["name"], "input")
+        self.assertIn("path", payload["data"][0])
+        self.assertTrue(payload["data"][0]["path"].endswith("data/input.txt"))
 
     def test_rejects_separate_instruction_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

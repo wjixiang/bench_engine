@@ -194,6 +194,7 @@ async def evaluate_examples(
     jobs: int = 1,
     skip_ids: set[str] | None = None,
     dry_run: bool = False,
+    data_mount_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Run all examples and append one JSON object per completed item."""
     skip = skip_ids or set()
@@ -215,7 +216,11 @@ async def evaluate_examples(
 
     async def run_one(example: Example) -> None:
         async with semaphore:
-            solver_result = await solver.solve(example, benchmark.prompt(example))
+            solver_result = await solver.solve(
+                example,
+                benchmark.prompt(example),
+                data_mount_path=data_mount_path,
+            )
             if grader is None:
                 grade = benchmark.grade(solver_result.response, example)
             else:

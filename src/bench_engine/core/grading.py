@@ -7,10 +7,8 @@ import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
-
 ANSWER_LINE = re.compile(
-    r"(?im)^\s*(?:\*\*)?\s*answer\s*(?:(?:\*\*)?\s*:|:\s*(?:\*\*)?)\s*"
-    r"(.*?)\s*$"
+    r"(?im)^\s*(?:\*\*)?\s*answer\s*(?:(?:\*\*)?\s*:|:\s*(?:\*\*)?)\s*" r"(.*?)\s*$"
 )
 MC_LETTER = re.compile(r"^\(?\**([A-Z])\**\)?(?:[.)])?\s*$")
 
@@ -71,7 +69,7 @@ def _numeric_equal(left: str, right: str) -> bool:
         return Decimal(_normalize(left).replace(",", "")) == Decimal(
             _normalize(right).replace(",", "")
         )
-    except (InvalidOperation, ValueError):
+    except InvalidOperation, ValueError:
         return False
 
 
