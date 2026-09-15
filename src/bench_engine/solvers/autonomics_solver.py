@@ -1,4 +1,4 @@
-"""Autonomics TUI solver backend."""
+"""Autonomics headless solver backend."""
 
 from __future__ import annotations
 
@@ -7,13 +7,18 @@ import json
 import logging
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from bench_engine.core.interfaces import Example, Solver, SolverResult
 from bench_engine.solvers.mounting import mount_example_data
 
-DEFAULT_TUI = Path("/mnt/projects/autonomics_projects/autonomics/target/release/tui")
+DEFAULT_AUTONOMICS = Path(
+    "/mnt/projects/autonomics_projects/autonomics/target/release/autonomics"
+)
+# Kept for callers that still import the old name.
+DEFAULT_TUI = DEFAULT_AUTONOMICS
 logger = logging.getLogger(__name__)
 
 
@@ -22,7 +27,7 @@ def _tail(text: str, limit: int = 4000) -> str:
 
 
 class AutonomicsTuiSolver(Solver):
-    """Drive Autonomics TUI headless mode in isolated sessions."""
+    """Drive Autonomics headless mode in isolated benchmark sessions."""
 
     def __init__(
         self,
@@ -46,16 +51,23 @@ class AutonomicsTuiSolver(Solver):
         data_mount_path: Path | None = None,
     ) -> SolverResult:
         self.data_mount_path = data_mount_path
+        data_mount: Path | None = None
+        workspace: Path | None = None
+        resume_workspace = False
         try:
             mounted_path = mount_example_data(example, data_mount_path)
         except (OSError, ValueError) as exc:
             return SolverResult("", False, error=f"failed to mount task data: {exc}")
         if mounted_path is not None:
             prompt += (
-                f"\n\nMounted task workspace: {mounted_path}\n"
-                f"Input files, when present, are under: {mounted_path / 'data'}"
+                "\n\nBenchmark inputs are mounted read-only at /data.\n"
+                "Write benchmark output files under /app. If the task asks for "
+                "answer.txt or trace.md, use /app/answer.txt and /app/trace.md."
             )
-        return await self.solve_raw(
+            data_mount = (mounted_path / "data").resolve()
+            workspace = (mounted_path / "work").resolve()
+            resume_workspace = any(workspace.iterdir())
+        result = await self.solve_raw(
             prompt,
             task_id=example.id,
             phase="answer",
@@ -65,7 +77,13 @@ class AutonomicsTuiSolver(Solver):
                 example.image or any(asset.role == "image" for asset in example.assets)
             ),
             working_directory=mounted_path,
+            data_mount=data_mount,
+            workspace=workspace,
+            resume_workspace=resume_workspace,
         )
+        if workspace is not None:
+            result = self._apply_workspace_artifacts(result, workspace)
+        return result
 
     async def solve_raw(
         self,
@@ -77,10 +95,13 @@ class AutonomicsTuiSolver(Solver):
         category: str | None = None,
         has_image: bool = False,
         working_directory: Path | None = None,
+        data_mount: Path | None = None,
+        workspace: Path | None = None,
+        resume_workspace: bool = False,
     ) -> SolverResult:
         started = time.perf_counter()
         logger.info(
-            "solver.start backend=autonomics-tui id=%s phase=%s executable=%s "
+            "solver.start backend=autonomics id=%s phase=%s executable=%s "
             "model=%s timeout=%.3fs prompt_chars=%d answer_type=%s "
             "category=%s image=%s",
             task_id,
@@ -97,7 +118,7 @@ class AutonomicsTuiSolver(Solver):
             result = SolverResult(
                 "",
                 False,
-                error=f"TUI executable does not exist: {self.executable}",
+                error=f"Autonomics executable does not exist: {self.executable}",
             )
             self._log_start_failed(task_id, phase, started, result.error)
             return result
@@ -105,25 +126,15 @@ class AutonomicsTuiSolver(Solver):
         with tempfile.TemporaryDirectory(prefix="bench-engine-tui-") as directory:
             output = Path(directory) / "last-message.txt"
             manifest = Path(directory) / "manifest.json"
-            argv = [
-                str(self.executable),
-                "run",
-                "--json",
-                "--ephemeral",
-                "--timeout",
-                str(int(self.timeout)),
-                "--output-last-message",
-                str(output),
-                "--manifest",
-                str(manifest),
-                "-",
-            ]
-            if self.model is not None:
-                argv.extend(("--model", self.model))
-            if self.profile is not None:
-                argv.extend(("--profile", str(self.profile)))
+            argv = self._build_argv(
+                output,
+                manifest,
+                data_mount=data_mount,
+                workspace=workspace,
+                resume_workspace=resume_workspace,
+            )
 
-            logger.info("tui.spawn id=%s phase=%s argv=%s", task_id, phase, argv)
+            logger.info("autonomics.spawn id=%s phase=%s argv=%s", task_id, phase, argv)
             try:
                 process = await asyncio.create_subprocess_exec(
                     *argv,
@@ -133,7 +144,11 @@ class AutonomicsTuiSolver(Solver):
                     stderr=asyncio.subprocess.PIPE,
                 )
             except (FileNotFoundError, PermissionError) as exc:
-                result = SolverResult("", False, error=f"failed to start TUI: {exc}")
+                result = SolverResult(
+                    "",
+                    False,
+                    error=f"failed to start Autonomics: {exc}",
+                )
                 self._log_start_failed(task_id, phase, started, result.error)
                 return result
 
@@ -149,7 +164,7 @@ class AutonomicsTuiSolver(Solver):
                     "",
                     False,
                     process.returncode,
-                    error=f"TUI did not stop within {self.timeout + 30:g}s",
+                    error=f"Autonomics did not stop within {self.timeout + 30:g}s",
                 )
                 self._log_end(
                     task_id,
@@ -190,17 +205,24 @@ class AutonomicsTuiSolver(Solver):
             except OSError:
                 pass
 
+            if not response and workspace is not None:
+                answer_path = workspace / "answer.txt"
+                if answer_path.is_file():
+                    response = answer_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).strip()
+
             returncode = process.returncode
             status = manifest_data.get("status")
             ok = returncode == 0 and response != "" and status == "completed"
             error = None
             if not ok:
                 error = (
-                    f"TUI produced no final message; code={returncode}, "
+                    f"Autonomics produced no final message; code={returncode}, "
                     f"status={status or 'unknown'}"
                     if not response
                     else (
-                        f"TUI exited with code {returncode}; "
+                        f"Autonomics exited with code {returncode}; "
                         f"status={status or 'unknown'}"
                     )
                 )
@@ -222,6 +244,69 @@ class AutonomicsTuiSolver(Solver):
                 response_chars=len(response),
             )
             return result
+
+    def _build_argv(
+        self,
+        output: Path,
+        manifest: Path,
+        *,
+        data_mount: Path | None,
+        workspace: Path | None,
+        resume_workspace: bool,
+    ) -> list[str]:
+        argv = [
+            str(self.executable),
+            "run",
+            "--json",
+            "--ephemeral",
+            "--backend",
+            "in-process",
+            "--timeout",
+            str(int(self.timeout)),
+            "--output-last-message",
+            str(output),
+            "--manifest",
+            str(manifest),
+        ]
+        if data_mount is not None:
+            argv.extend(("--data-mount", f"{data_mount}=/data"))
+        if workspace is not None:
+            argv.extend(("--workspace", f"{workspace}=/app"))
+        if resume_workspace:
+            argv.append("--resume-workspace")
+        if self.model is not None:
+            argv.extend(("--model", self.model))
+        if self.profile is not None:
+            argv.extend(("--profile", str(self.profile)))
+        argv.append("-")
+        return argv
+
+    @staticmethod
+    def _collect_artifacts(workspace: Path) -> dict[str, str]:
+        artifacts: dict[str, str] = {}
+        for filename in ("answer.txt", "trace.md"):
+            path = workspace / filename
+            if path.is_file():
+                key = filename.removesuffix(".txt").removesuffix(".md")
+                artifacts[key] = str(path)
+        return artifacts
+
+    @classmethod
+    def _apply_workspace_artifacts(
+        cls,
+        result: SolverResult,
+        workspace: Path,
+    ) -> SolverResult:
+        artifacts = cls._collect_artifacts(workspace)
+        if result.ok and "answer" in artifacts:
+            answer_text = (
+                (workspace / "answer.txt")
+                .read_text(encoding="utf-8", errors="replace")
+                .strip()
+            )
+            if answer_text:
+                result = replace(result, response=answer_text)
+        return replace(result, artifacts=artifacts)
 
     def _log_start_failed(
         self,

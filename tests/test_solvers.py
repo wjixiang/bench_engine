@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bench_engine.core.interfaces import Example, TaskAsset
+from bench_engine.core.interfaces import Example, SolverResult, TaskAsset
 from bench_engine.solvers.autonomics_solver import AutonomicsTuiSolver
 from bench_engine.solvers.custom import CustomCommandSolver
 from bench_engine.solvers.mounting import mount_example_data
@@ -37,6 +37,109 @@ class SolverTest(unittest.TestCase):
         self.assertFalse(result.ok)
         error = result.error
         self.assertTrue(error is not None and "does not exist" in error)
+
+    def test_autonomics_command_uses_ephemeral_vfs_mounts(self) -> None:
+        solver = AutonomicsTuiSolver(
+            Path("/usr/bin/autonomics"),
+            timeout=123,
+            model="provider:model",
+            profile=Path("/profiles/benchmark.md"),
+        )
+
+        argv = solver._build_argv(
+            Path("/tmp/last-message.txt"),
+            Path("/tmp/manifest.json"),
+            data_mount=Path("/mounts/task/data"),
+            workspace=Path("/mounts/task/work"),
+            resume_workspace=True,
+        )
+
+        self.assertIn("--backend", argv)
+        self.assertEqual(argv[argv.index("--backend") + 1], "in-process")
+        self.assertIn("--data-mount", argv)
+        self.assertEqual(
+            argv[argv.index("--data-mount") + 1],
+            "/mounts/task/data=/data",
+        )
+        self.assertIn("--workspace", argv)
+        self.assertEqual(
+            argv[argv.index("--workspace") + 1],
+            "/mounts/task/work=/app",
+        )
+        self.assertIn("--resume-workspace", argv)
+        self.assertEqual(argv[-1], "-")
+
+    def test_autonomics_collects_answer_and_trace_artifacts(self) -> None:
+        captured: dict[str, object] = {}
+
+        class StubAutonomicsSolver(AutonomicsTuiSolver):
+            async def solve_raw(
+                self,
+                prompt: str,
+                *,
+                task_id: str = "<raw>",
+                phase: str = "raw",
+                answer_type: str | None = None,
+                category: str | None = None,
+                has_image: bool = False,
+                working_directory: Path | None = None,
+                data_mount: Path | None = None,
+                workspace: Path | None = None,
+                resume_workspace: bool = False,
+            ) -> SolverResult:
+                captured.update(
+                    {
+                        "prompt": prompt,
+                        "data_mount": data_mount,
+                        "workspace": workspace,
+                        "resume_workspace": resume_workspace,
+                    }
+                )
+                assert workspace is not None
+                (workspace / "answer.txt").write_text(
+                    "artifact answer", encoding="utf-8"
+                )
+                (workspace / "trace.md").write_text("trace", encoding="utf-8")
+                return SolverResult("final message", True)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.txt"
+            source.write_text("input", encoding="utf-8")
+            example = Example(
+                id="task-1",
+                question="Question",
+                image="",
+                target="A",
+                answer_type="multipleChoice",
+                category="Test",
+                assets=(
+                    TaskAsset(
+                        "input",
+                        source,
+                        relative_path="data/input.txt",
+                    ),
+                ),
+            )
+            solver = StubAutonomicsSolver(Path("/usr/bin/autonomics"), timeout=5)
+
+            result = asyncio.run(
+                solver.solve(example, "prompt", data_mount_path=root / "mounts")
+            )
+            assert isinstance(captured["data_mount"], Path)
+            assert isinstance(captured["workspace"], Path)
+            self.assertTrue((captured["data_mount"] / "input.txt").is_file())
+            self.assertTrue(
+                (captured["data_mount"].parent / "data/input.txt").is_symlink()
+            )
+            self.assertTrue((captured["workspace"] / "answer.txt").is_file())
+
+        self.assertEqual(result.response, "artifact answer")
+        self.assertTrue(result.ok)
+        self.assertEqual(sorted(result.artifacts), ["answer", "trace"])
+        self.assertIn("/data", str(captured["prompt"]))
+        self.assertIn("/app", str(captured["prompt"]))
+        self.assertEqual(captured["resume_workspace"], False)
 
     def test_custom_solver_receives_mounted_data_and_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -113,6 +216,7 @@ class SolverTest(unittest.TestCase):
                 (first / "data/input.txt").resolve(),
                 source.resolve(),
             )
+            self.assertTrue((first / "work").is_dir())
 
             unsafe = Example(
                 id="../unsafe",

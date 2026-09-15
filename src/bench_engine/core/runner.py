@@ -23,7 +23,7 @@ from bench_engine.core.interfaces import (
     SolverResult,
 )
 
-RESULT_SCHEMA = 2
+RESULT_SCHEMA = 3
 
 
 class OpenAIGrader:
@@ -110,6 +110,7 @@ def _result_record(
         "solver_model": solver_result.model,
         "solver_usage": solver_result.usage,
         "solver_stderr_tail": solver_result.stderr_tail,
+        "solver_artifacts": solver_result.artifacts,
     }
 
 
@@ -127,7 +128,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"invalid JSONL in {path} at line {line_number}: {exc}"
                 ) from exc
-            if record.get("schema") != RESULT_SCHEMA:
+            if record.get("schema") not in {2, RESULT_SCHEMA}:
                 raise ValueError(
                     f"unsupported result schema at {path}:{line_number}: "
                     f"{record.get('schema')!r}"

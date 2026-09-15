@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -75,6 +75,7 @@ class SolverResult:
     model: str | None = None
     usage: dict[str, Any] | None = None
     stderr_tail: str = ""
+    artifacts: dict[str, str] = field(default_factory=dict)
 
 
 class Solver(Protocol):

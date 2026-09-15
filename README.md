@@ -25,19 +25,32 @@ uv run bench-engine evaluate --benchmark hle-biomedical --limit 2 --dry-run
 uv run bench-engine evaluate --benchmark lab-dbqa --limit 2 --dry-run
 ```
 
-使用 Autonomics TUI：
+使用 Autonomics headless：
 
 ```bash
 uv run bench-engine evaluate \
   --benchmark hle-biomedical \
   --limit 5 \
   --model provider:model-name \
+  --data-mount-path runs/solver-data \
   --output runs/biomedical.jsonl
 ```
 
-默认 TUI 是
-`/mnt/projects/autonomics_projects/autonomics/target/release/tui`，
-可用 `--tui PATH` 或 `BENCH_ENGINE_TUI=PATH` 覆盖。
+默认 executable 是
+`/mnt/projects/autonomics_projects/autonomics/target/release/autonomics`，
+可用 `--autonomics PATH`（兼容 `--tui PATH`）、`BENCH_ENGINE_AUTONOMICS` 或兼容的
+`BENCH_ENGINE_TUI` 覆盖。
+
+传入 `--data-mount-path` 后，Autonomics 以 `--ephemeral --backend in-process`
+启动，并把每个 task 挂载为：
+
+```text
+/data  # read-only benchmark inputs
+/app   # writable benchmark workspace
+```
+
+如果 agent 生成 `/app/answer.txt`，Bench Engine 会优先把它作为最终响应；
+`/app/answer.txt` 和 `/app/trace.md` 会记录到结果的 `solver_artifacts` 字段。
 
 使用外部 solver：
 
@@ -124,8 +137,8 @@ datasets/<benchmark>/<dataset>/<task-id>/
 `data[].path` 必须是相对 task 文件夹且位于 `data/` 下的文件或目录路径。答案和
 评分信息不会进入 solver payload。传入 `--data-mount-path` 后，runner 会把该路径
 传给 solver；solver 内部为每个 task 创建 `<mount-root>/<task-id>/`，把 assets 按
-相对路径符号链接到其中，并将该目录作为 solver 子进程的工作目录。外部 solver
-payload 中的 `data[].path` 也会映射到挂载后的路径；未指定挂载路径时保留源路径。
+相对路径符号链接到 `data/`，并创建可写 `work/`。外部 solver payload 中的
+`data[].path` 会映射到挂载后的路径；未指定挂载路径时保留源路径。
 
 HLE 也已迁移为 task package：
 

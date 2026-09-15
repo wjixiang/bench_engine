@@ -78,6 +78,8 @@ class CoreTest(unittest.TestCase):
             record = json.loads(output.read_text("utf-8"))
             self.assertEqual(record["benchmark"], "hle")
             self.assertTrue(record["correct"])
+            self.assertEqual(record["schema"], 3)
+            self.assertEqual(record["solver_artifacts"], {})
         self.assertEqual(summarize(records)["accuracy"], 1.0)
         self.assertIsNotNone(solver.data_mount_path)
 

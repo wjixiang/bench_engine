@@ -23,6 +23,7 @@ def mount_example_data(
     _validate_component(example.id, "task id")
     task_mount_path = data_mount_path / example.id
     task_mount_path.mkdir(parents=True, exist_ok=True)
+    (task_mount_path / "work").mkdir(exist_ok=True)
 
     for asset in example.assets:
         _validate_component(asset.name, "asset name")
@@ -37,5 +38,8 @@ def mount_example_data(
             raise ValueError(f"data mount destination already exists: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.symlink_to(source, target_is_directory=source.is_dir())
+
+    if not (task_mount_path / "data").exists():
+        (task_mount_path / "data").mkdir()
 
     return task_mount_path

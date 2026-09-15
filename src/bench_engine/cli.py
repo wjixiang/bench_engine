@@ -33,7 +33,10 @@ from bench_engine.core.runner import (
     read_results,
     summarize,
 )
-from bench_engine.solvers.autonomics_solver import DEFAULT_TUI, AutonomicsTuiSolver
+from bench_engine.solvers.autonomics_solver import (
+    DEFAULT_AUTONOMICS,
+    AutonomicsTuiSolver,
+)
 from bench_engine.solvers.custom import CustomCommandSolver
 
 load_dotenv(Path(".env"))
@@ -53,13 +56,15 @@ def _default_output() -> Path:
     return Path("runs") / f"bench-engine-{stamp}.jsonl"
 
 
-def _default_tui(override: Path | None) -> Path:
+def _default_autonomics(override: Path | None) -> Path:
     if override is not None:
         return override
-    configured = os.environ.get("BENCH_ENGINE_TUI")
+    configured = os.environ.get("BENCH_ENGINE_AUTONOMICS") or os.environ.get(
+        "BENCH_ENGINE_TUI"
+    )
     if configured:
         return Path(configured)
-    return DEFAULT_TUI
+    return DEFAULT_AUTONOMICS
 
 
 @app.command()
@@ -162,9 +167,13 @@ def evaluate(
             help="Custom argv command; receives JSON on stdin and response on stdout.",
         ),
     ] = None,
-    tui: Annotated[
+    autonomics: Annotated[
         Path | None,
-        typer.Option("--tui", help="Autonomics TUI executable."),
+        typer.Option(
+            "--autonomics",
+            "--tui",
+            help="Autonomics headless executable.",
+        ),
     ] = None,
     model: Annotated[str | None, typer.Option("--model")] = None,
     profile: Annotated[
@@ -333,14 +342,14 @@ def evaluate(
             raise typer.BadParameter(str(exc)) from exc
         solver_kind = f"command:{shlex.join(solver.argv)}"
     else:
-        executable = _default_tui(tui)
+        executable = _default_autonomics(autonomics)
         solver = AutonomicsTuiSolver(
             executable,
             timeout,
             model=model,
             profile=profile,
         )
-        solver_kind = f"tui:{solver.executable}"
+        solver_kind = f"autonomics:{solver.executable}"
 
     try:
         skip = completed_ids(output) if resume and output.exists() else set()
