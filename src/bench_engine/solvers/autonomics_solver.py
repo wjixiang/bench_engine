@@ -24,7 +24,6 @@ DEFAULT_AUTONOMICS = Path(
 DEFAULT_TUI = DEFAULT_AUTONOMICS
 logger = logging.getLogger(__name__)
 
-
 def _agent_name(task_id: str) -> str:
     """Build a fresh, gateway-safe agent name for one benchmark task."""
     stem = re.sub(r"[^a-z0-9_]+", "_", task_id.lower()).strip("_")[:20] or "task"
@@ -159,13 +158,15 @@ class AutonomicsTuiSolver(Solver):
         with tempfile.TemporaryDirectory(prefix="bench-engine-tui-") as directory:
             output = Path(directory) / "last-message.txt"
             manifest = Path(directory) / "manifest.json"
+            process_cwd = Path(directory) / "cwd"
+            process_cwd.mkdir()
             argv = self._build_argv(output, manifest, task_id=task_id)
 
             logger.info("autonomics.spawn id=%s phase=%s argv=%s", task_id, phase, argv)
             try:
                 process = await asyncio.create_subprocess_exec(
                     *argv,
-                    cwd=working_directory,
+                    cwd=process_cwd,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
