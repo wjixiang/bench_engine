@@ -126,3 +126,175 @@ class DataTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def write_rubric_task_package(directory: Path) -> Path:
+    task_path = directory / "tasks" / "rubric-task"
+    real_data = directory / "real" / "rubric-task" / "environment"
+    real_data.mkdir(parents=True)
+    (real_data / "matrix.tsv").write_text("cell data")
+    task_path.mkdir(parents=True)
+    (task_path / "data").symlink_to(real_data)
+    task = {
+        "schema_version": 1,
+        "id": "rubric-task",
+        "instruction": "Analyze the data end to end.",
+        "category": "oncology",
+        "subtask": "cell-composition",
+        "grading": {
+            "method": "rubric",
+            "answer_type": "rubric",
+            "answer": None,
+            "rubric": "RUBRIC: 5 criteria worth 20 points each.",
+            "pass_threshold": 0.6,
+        },
+        "data": [
+            {
+                "name": "environment",
+                "path": "data",
+                "media_type": "application/x-directory",
+                "role": "workspace",
+            }
+        ],
+    }
+    (task_path / "task.json").write_text(
+        json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return directory / "tasks"
+
+
+class RubricTaskTest(unittest.TestCase):
+    def test_loads_rubric_task_with_null_answer_and_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dataset_path = write_rubric_task_package(Path(directory))
+            examples = load_examples(dataset_path)
+            self.assertEqual(len(examples), 1)
+            example = examples[0]
+            self.assertEqual(example.target, "")
+            self.assertEqual(example.answer_type, "rubric")
+            self.assertIn("RUBRIC", example.rubric)
+            self.assertEqual(example.grade_threshold, 0.6)
+            self.assertEqual(len(example.assets), 1)
+            self.assertTrue(example.assets[0].path.is_dir())
+            self.assertNotEqual(example.assets[0].path, example.task_path / "data")
+
+    def test_accepts_threshold_alias_pass_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            task_path = base / "tasks" / "rubric-task"
+            (task_path / "data").mkdir(parents=True)
+            (task_path / "data" / "x").write_text("x")
+            task = {
+                "schema_version": 1,
+                "id": "rubric-task",
+                "instruction": "Q.",
+                "category": "x",
+                "grading": {
+                    "method": "rubric",
+                    "answer_type": "rubric",
+                    "answer": None,
+                    "rubric": "R.",
+                    "threshold": 0.42,
+                },
+                "data": [
+                    {
+                        "name": "environment",
+                        "path": "data",
+                        "media_type": "application/x-directory",
+                        "role": "workspace",
+                    }
+                ],
+            }
+            (task_path / "task.json").write_text(json.dumps(task))
+            [example] = load_examples(base / "tasks")
+            self.assertEqual(example.grade_threshold, 0.42)
+
+    def test_rejects_rubric_without_rubric_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            task_path = base / "tasks" / "rubric-task"
+            (task_path / "data").mkdir(parents=True)
+            (task_path / "data" / "x").write_text("x")
+            task = {
+                "schema_version": 1,
+                "id": "rubric-task",
+                "instruction": "Q.",
+                "category": "x",
+                "grading": {
+                    "method": "rubric",
+                    "answer_type": "rubric",
+                    "answer": None,
+                },
+                "data": [
+                    {
+                        "name": "environment",
+                        "path": "data",
+                        "media_type": "application/x-directory",
+                        "role": "workspace",
+                    }
+                ],
+            }
+            (task_path / "task.json").write_text(json.dumps(task))
+            with self.assertRaisesRegex(ValueError, "rubric grading requires"):
+                load_examples(base / "tasks")
+
+    def test_rejects_rubric_with_non_string_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            task_path = base / "tasks" / "rubric-task"
+            (task_path / "data").mkdir(parents=True)
+            (task_path / "data" / "x").write_text("x")
+            task = {
+                "schema_version": 1,
+                "id": "rubric-task",
+                "instruction": "Q.",
+                "category": "x",
+                "grading": {
+                    "method": "rubric",
+                    "answer_type": "rubric",
+                    "answer": 42,
+                    "rubric": "R.",
+                },
+                "data": [
+                    {
+                        "name": "environment",
+                        "path": "data",
+                        "media_type": "application/x-directory",
+                        "role": "workspace",
+                    }
+                ],
+            }
+            (task_path / "task.json").write_text(json.dumps(task))
+            with self.assertRaisesRegex(ValueError, "null or a string"):
+                load_examples(base / "tasks")
+
+    def test_rejects_out_of_range_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            task_path = base / "tasks" / "rubric-task"
+            (task_path / "data").mkdir(parents=True)
+            (task_path / "data" / "x").write_text("x")
+            task = {
+                "schema_version": 1,
+                "id": "rubric-task",
+                "instruction": "Q.",
+                "category": "x",
+                "grading": {
+                    "method": "rubric",
+                    "answer_type": "rubric",
+                    "answer": None,
+                    "rubric": "R.",
+                    "pass_threshold": 1.5,
+                },
+                "data": [
+                    {
+                        "name": "environment",
+                        "path": "data",
+                        "media_type": "application/x-directory",
+                        "role": "workspace",
+                    }
+                ],
+            }
+            (task_path / "task.json").write_text(json.dumps(task))
+            with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+                load_examples(base / "tasks")

@@ -29,8 +29,8 @@ DATASET_SCHEMA: Mapping[str, type[pl.DataType]] = {
     "answer_type": pl.String,
     "category": pl.String,
 }
-ANSWER_TYPES = frozenset(("exactMatch", "multipleChoice"))
-GRADING_METHODS = frozenset(("exact",))
+ANSWER_TYPES = frozenset(("exactMatch", "multipleChoice", "rubric"))
+GRADING_METHODS = frozenset(("exact", "rubric"))
 
 
 @dataclass(frozen=True)
@@ -286,10 +286,35 @@ def _load_task_package(task_path: Path) -> Example:
         raise ValueError(
             f"task answer_type must be one of: {valid}; got {answer_type!r}"
         )
-    if not isinstance(answer, str) or not answer.strip():
-        raise ValueError(
-            f"task grading answer must be a non-blank string: {metadata_path}"
-        )
+    if method == "rubric":
+        if answer_type != "rubric":
+            raise ValueError("rubric grading requires answer_type 'rubric'")
+        if answer is not None and not isinstance(answer, str):
+            raise ValueError(
+                f"rubric grading answer must be null or a string: {metadata_path}"
+            )
+        rubric = grading.get("rubric")
+        threshold = grading.get("threshold", grading.get("pass_threshold", 1.0))
+        if not isinstance(rubric, str) or not rubric.strip():
+            raise ValueError(
+                f"rubric grading requires non-blank rubric text: {metadata_path}"
+            )
+        if not isinstance(threshold, (int, float)) or not 0 <= threshold <= 1:
+            raise ValueError(
+                f"rubric threshold must be between 0 and 1: {metadata_path}"
+            )
+    else:
+        rubric = ""
+        threshold = 1.0
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError(
+                f"task grading answer must be a non-blank string: {metadata_path}"
+            )
+    if not isinstance(answer, str):
+        answer = ""
+
+    if rubric and method != "rubric":
+        raise ValueError(f"only rubric grading may define rubric text: {metadata_path}")
     assets: list[TaskAsset] = []
     asset_names: set[str] = set()
     data = task.get("data", [])
@@ -309,13 +334,18 @@ def _load_task_package(task_path: Path) -> Example:
         asset_names.add(name)
         if not isinstance(relative_path, str) or not relative_path.strip():
             raise ValueError(f"task data[{index}].path must be a non-blank string")
-        asset_path = (task_path / relative_path).resolve()
-        try:
-            asset_path.relative_to(task_path.resolve() / "data")
-        except ValueError as exc:
-            raise ValueError(
-                f"task data path must stay under data/: {relative_path!r}"
-            ) from exc
+        declared_path = task_path / relative_path
+        asset_path = declared_path.resolve()
+        if declared_path.is_symlink() and relative_path == "data":
+            if not declared_path.is_dir():
+                raise ValueError(f"task data symlink must name a directory: {asset_path}")
+        else:
+            try:
+                asset_path.relative_to((task_path / "data").resolve())
+            except ValueError as exc:
+                raise ValueError(
+                    f"task data path must stay under data/: {relative_path!r}"
+                ) from exc
         if not asset_path.exists():
             raise ValueError(f"task data asset does not exist: {asset_path}")
         media_type = entry.get("media_type", "application/octet-stream")
@@ -345,4 +375,6 @@ def _load_task_package(task_path: Path) -> Example:
         category=category,
         task_path=task_path.resolve(),
         assets=tuple(assets),
+        rubric=rubric,
+        grade_threshold=float(threshold),
     )

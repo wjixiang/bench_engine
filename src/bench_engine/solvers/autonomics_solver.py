@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from bench_engine.core.interfaces import Example, Solver, SolverResult
+from bench_engine.solvers.gateway import (
+    GatewayError,
+    ensure_headless_holder,
+    virtual_path,
+)
 from bench_engine.solvers.mounting import mount_example_data
 
 DEFAULT_AUTONOMICS = Path(
@@ -36,11 +41,13 @@ class AutonomicsTuiSolver(Solver):
         *,
         model: str | None = None,
         profile: Path | None = None,
+        use_gateway: bool = False,
     ) -> None:
         self.executable = executable
         self.timeout = timeout
         self.model = model
         self.profile = profile
+        self.use_gateway = use_gateway
         self.data_mount_path: Path | None = None
 
     async def solve(
@@ -59,14 +66,39 @@ class AutonomicsTuiSolver(Solver):
         except (OSError, ValueError) as exc:
             return SolverResult("", False, error=f"failed to mount task data: {exc}")
         if mounted_path is not None:
-            prompt += (
-                "\n\nBenchmark inputs are mounted read-only at /data.\n"
-                "Write benchmark output files under /app. If the task asks for "
-                "answer.txt or trace.md, use /app/answer.txt and /app/trace.md."
-            )
-            data_mount = (mounted_path / "data").resolve()
+            mounted_data = mounted_path / "data"
+            data_mount = mounted_data.resolve()
             workspace = (mounted_path / "work").resolve()
             resume_workspace = any(workspace.iterdir())
+            if self.use_gateway:
+                try:
+                    ensure_headless_holder(
+                        self.executable,
+                        profile=self.profile,
+                        model=self.model,
+                    )
+                    virtual_data = virtual_path(mounted_data)
+                    virtual_workspace = virtual_path(workspace)
+                except GatewayError as exc:
+                    return SolverResult(
+                        "",
+                        False,
+                        error=f"failed to prepare gateway benchmark holder: {exc}",
+                    )
+                prompt += (
+                    "\n\nThis run uses the resident Autonomics gateway VFS.\n"
+                    f"Benchmark inputs are read-only at: {virtual_data}\n"
+                    f"Write all benchmark output files under: {virtual_workspace}\n"
+                    "If the task asks for answer.txt or trace.md, create them "
+                    f"as {virtual_workspace}/answer.txt and "
+                    f"{virtual_workspace}/trace.md. Treat this workspace as /app."
+                )
+            else:
+                prompt += (
+                    "\n\nBenchmark inputs are mounted read-only at /data.\n"
+                    "Write benchmark output files under /app. If the task asks for "
+                    "answer.txt or trace.md, use /app/answer.txt and /app/trace.md."
+        )
         result = await self.solve_raw(
             prompt,
             task_id=example.id,
@@ -98,15 +130,17 @@ class AutonomicsTuiSolver(Solver):
         data_mount: Path | None = None,
         workspace: Path | None = None,
         resume_workspace: bool = False,
+        session_id: str | None = None,
     ) -> SolverResult:
         started = time.perf_counter()
         logger.info(
             "solver.start backend=autonomics id=%s phase=%s executable=%s "
-            "model=%s timeout=%.3fs prompt_chars=%d answer_type=%s "
+            "mode=%s model=%s timeout=%.3fs prompt_chars=%d answer_type=%s "
             "category=%s image=%s",
             task_id,
             phase,
             self.executable,
+            "gateway" if self.use_gateway else "ephemeral",
             self.model or "<active>",
             self.timeout,
             len(prompt),
@@ -258,9 +292,6 @@ class AutonomicsTuiSolver(Solver):
             str(self.executable),
             "run",
             "--json",
-            "--ephemeral",
-            "--backend",
-            "in-process",
             "--timeout",
             str(int(self.timeout)),
             "--output-last-message",
@@ -268,12 +299,16 @@ class AutonomicsTuiSolver(Solver):
             "--manifest",
             str(manifest),
         ]
-        if data_mount is not None:
-            argv.extend(("--data-mount", f"{data_mount}=/data"))
-        if workspace is not None:
-            argv.extend(("--workspace", f"{workspace}=/app"))
-        if resume_workspace:
-            argv.append("--resume-workspace")
+        if self.use_gateway:
+            argv.append("--no-memory")
+        else:
+            argv.extend(("--ephemeral", "--backend", "in-process"))
+            if data_mount is not None:
+                argv.extend(("--data-mount", f"{data_mount}=/data"))
+            if workspace is not None:
+                argv.extend(("--workspace", f"{workspace}=/app"))
+            if resume_workspace:
+                argv.append("--resume-workspace")
         if self.model is not None:
             argv.extend(("--model", self.model))
         if self.profile is not None:

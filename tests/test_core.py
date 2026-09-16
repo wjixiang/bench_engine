@@ -83,6 +83,26 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(summarize(records)["accuracy"], 1.0)
         self.assertIsNotNone(solver.data_mount_path)
 
+    def test_summary_exposes_rubric_scores_separately_from_binary_accuracy(self) -> None:
+        record = {
+            "id": "rubric-1",
+            "answer_type": "rubric",
+            "category": "Test",
+            "correct": True,
+            "grade_method": "rubric",
+            "grade_detail": "score=92/100 threshold=70/100 verdict=PASS",
+            "solver_ok": True,
+        }
+
+        summary = summarize([record])
+
+        self.assertEqual(summary["accuracy"], 1.0)
+        self.assertEqual(summary["rubric_scored"], 1)
+        self.assertEqual(summary["rubric_average_score"], 92.0)
+        self.assertEqual(summary["rubric_min_score"], 92.0)
+        self.assertEqual(summary["rubric_max_score"], 92.0)
+        self.assertEqual(summary["rubric_pass_rate"], 1.0)
+
     def test_openai_grader_uses_native_responses_api(self) -> None:
         client = MagicMock()
         client.responses.create = AsyncMock(
@@ -90,7 +110,7 @@ class CoreTest(unittest.TestCase):
         )
         grader = OpenAIGrader(HLE, model="test-grader-model", client=client)
 
-        grade = asyncio.run(grader.grade(HLE, EXAMPLE, "work\nAnswer: 4"))
+        grade = asyncio.run(grader.grade(HLE, EXAMPLE, SolverResult("work\nAnswer: 4", True)))
 
         self.assertTrue(grade.correct)
         self.assertEqual(grade.method, "model")
@@ -105,12 +125,12 @@ class CoreTest(unittest.TestCase):
             return_value=SimpleNamespace(output_text="no verdict")
         )
         grader = OpenAIGrader(HLE, model="test-grader-model", client=client)
-        grade = asyncio.run(grader.grade(HLE, EXAMPLE, "Answer: 4"))
+        grade = asyncio.run(grader.grade(HLE, EXAMPLE, SolverResult("Answer: 4", True)))
         self.assertIsNone(grade.correct)
         self.assertIn("could not parse grader verdict", grade.detail)
 
         client.responses.create = AsyncMock(side_effect=OpenAIError("request failed"))
-        grade = asyncio.run(grader.grade(HLE, EXAMPLE, "Answer: 4"))
+        grade = asyncio.run(grader.grade(HLE, EXAMPLE, SolverResult("Answer: 4", True)))
         self.assertIsNone(grade.correct)
         self.assertIn("OpenAI grader failed", grade.detail)
 

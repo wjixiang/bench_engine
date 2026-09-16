@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 
 from bench_engine.benchmarks.hle import HLE
 from bench_engine.benchmarks.lab_bench import LAB_BENCH, LAB_BENCH_DATASETS
+from bench_engine.benchmarks.omicos import OMICOS
 from bench_engine.core.data import (
     DatasetInfo,
     dataset_path,
@@ -33,6 +34,7 @@ from bench_engine.core.runner import (
     read_results,
     summarize,
 )
+from bench_engine.grading import CodexLocalGrader, OmicOSGrader
 from bench_engine.solvers.autonomics_solver import (
     DEFAULT_AUTONOMICS,
     AutonomicsTuiSolver,
@@ -175,6 +177,16 @@ def evaluate(
             help="Autonomics headless executable.",
         ),
     ] = None,
+    autonomics_gateway: Annotated[
+        bool,
+        typer.Option(
+            "--autonomics-gateway/--autonomics-ephemeral",
+            help=(
+                "Reuse the resident Autonomics gateway (one fresh fallback identity "
+                "per task) or run isolated in-process Autonomics processes."
+            ),
+        ),
+    ] = False,
     model: Annotated[str | None, typer.Option("--model")] = None,
     profile: Annotated[
         Path | None, typer.Option("--profile", help="Autonomics agent profile.")
@@ -197,7 +209,10 @@ def evaluate(
     ] = None,
     grader_mode: Annotated[
         str,
-        typer.Option("--grader", help="Exact deterministic grading or model grading."),
+        typer.Option(
+            "--grader",
+            help="Grader mode: 'exact', 'model', 'omicos' for BigModel-compatible rubric scoring, or 'codex-local' for local headless codex exec.",
+        ),
     ] = "exact",
     grader_model: Annotated[
         str | None,
@@ -237,13 +252,15 @@ def evaluate(
     """Run a solver over selected questions and write JSONL results."""
     if data is not None and benchmark != "hle-all":
         raise typer.BadParameter("--data requires --benchmark hle-all")
-    if grader_mode not in {"exact", "model"}:
-        raise typer.BadParameter("--grader must be 'exact' or 'model'")
+    if grader_mode not in {"exact", "model", "omicos", "codex-local"}:
+        raise typer.BadParameter(
+            "--grader must be 'exact', 'model', 'omicos', or 'codex-local'"
+        )
     selected_grader_model = grader_model or os.environ.get("OPENAI_GRADER_MODEL")
     selected_grader_base_url = grader_base_url or os.environ.get("OPENAI_BASE_URL")
-    if grader_mode == "model" and not selected_grader_model:
+    if grader_mode in {"model", "omicos"} and not selected_grader_model:
         raise typer.BadParameter(
-            "--grader model requires --grader-model or OPENAI_GRADER_MODEL"
+            "--grader model/omicos requires --grader-model or OPENAI_GRADER_MODEL"
         )
     if not quiet:
         logging.basicConfig(
@@ -252,6 +269,15 @@ def evaluate(
             datefmt="%H:%M:%S",
             force=True,
         )
+    if autonomics_gateway:
+        if solver_command is not None:
+            raise typer.BadParameter(
+                "--autonomics-gateway cannot be combined with --solver-command"
+            )
+        if data_mount_path is None:
+            raise typer.BadParameter(
+                "--autonomics-gateway requires --data-mount-path under the gateway VFS root"
+            )
 
     base_benchmark = HLE
     try:
@@ -272,7 +298,12 @@ def evaluate(
                 "hle-biomedical": ("hle:biomedical", HLE),
                 "hle-biomedical-visual": ("hle:biomedical_visual", HLE),
             }
-            choices = [*hle_benchmarks, "lab-bench", *LAB_BENCH_DATASETS]
+            choices = [
+                *hle_benchmarks,
+                "lab-bench",
+                *LAB_BENCH_DATASETS,
+                *OMICOS_BIOMNIBENCH_DATASETS,
+            ]
             if benchmark in hle_benchmarks:
                 dataset_name, base_benchmark = hle_benchmarks[benchmark]
                 examples = load_examples(
@@ -289,6 +320,18 @@ def evaluate(
                 base_benchmark = LAB_BENCH
                 examples = _load_lab_bench_examples(
                     benchmark,
+                    offset=offset,
+                    limit=limit,
+                    ids=question_id,
+                    answer_type=answer_type,
+                    category=category,
+                    shuffle=shuffle,
+                    seed=seed,
+                )
+            elif benchmark in OMICOS_BIOMNIBENCH_DATASETS:
+                base_benchmark = OMICOS
+                examples = load_examples(
+                    dataset_path(OMICOS_BIOMNIBENCH_DATASETS[benchmark]),
                     offset=offset,
                     limit=limit,
                     ids=question_id,
@@ -322,10 +365,6 @@ def evaluate(
 
     engine_grader = None
     if grader_mode == "model":
-        if selected_grader_model is None:
-            raise typer.BadParameter(
-                "--grader model requires --grader-model or OPENAI_GRADER_MODEL"
-            )
         try:
             engine_grader = OpenAIGrader(
                 base_benchmark,
@@ -333,6 +372,23 @@ def evaluate(
                 base_url=selected_grader_base_url,
             )
         except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    elif grader_mode == "omicos":
+        try:
+            engine_grader = OmicOSGrader(
+                model=selected_grader_model,
+                base_url=selected_grader_base_url,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    elif grader_mode == "codex-local":
+        codex_path = os.environ.get("BENCH_ENGINE_CODEX", "codex")
+        try:
+            engine_grader = CodexLocalGrader(
+                codex_path=codex_path,
+                model=selected_grader_model,
+            )
+        except (FileNotFoundError, ValueError) as exc:
             raise typer.BadParameter(str(exc)) from exc
 
     if solver_command is not None:
@@ -348,8 +404,13 @@ def evaluate(
             timeout,
             model=model,
             profile=profile,
+            use_gateway=autonomics_gateway,
         )
-        solver_kind = f"autonomics:{solver.executable}"
+        solver_kind = (
+            f"autonomics-gateway:{solver.executable}"
+            if autonomics_gateway
+            else f"autonomics:{solver.executable}"
+        )
 
     try:
         skip = completed_ids(output) if resume and output.exists() else set()

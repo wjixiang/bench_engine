@@ -48,6 +48,8 @@ class Example:
     category: str
     task_path: Path | None = None
     assets: tuple[TaskAsset, ...] = ()
+    rubric: str = ""
+    grade_threshold: float = 1.0
 
     def payload(self, data_mount_path: Path | None = None) -> dict[str, Any]:
         """Return the JSON-serializable item passed to external solvers."""
@@ -97,7 +99,7 @@ class Grader(Protocol):
         self,
         benchmark: Benchmark,
         example: Example,
-        response: str,
+        solver_result: SolverResult,
     ) -> Grade: ...
 
 

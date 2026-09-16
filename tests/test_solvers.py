@@ -4,6 +4,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from bench_engine.core.interfaces import Example, SolverResult, TaskAsset
 from bench_engine.solvers.autonomics_solver import AutonomicsTuiSolver
@@ -68,6 +69,118 @@ class SolverTest(unittest.TestCase):
         )
         self.assertIn("--resume-workspace", argv)
         self.assertEqual(argv[-1], "-")
+
+    def test_autonomics_gateway_argv_avoids_mounts_and_persistent_session(self) -> None:
+        solver = AutonomicsTuiSolver(
+            Path("/usr/bin/autonomics"),
+            timeout=123,
+            model="provider:model",
+            profile=Path("researcher"),
+            use_gateway=True,
+        )
+
+        argv = solver._build_argv(
+            Path("/tmp/last-message.txt"),
+            Path("/tmp/manifest.json"),
+            data_mount=Path("/gateway-vfs/task/data"),
+            workspace=Path("/gateway-vfs/task/work"),
+            resume_workspace=True,
+        )
+
+        self.assertNotIn("--ephemeral", argv)
+        self.assertNotIn("--backend", argv)
+        self.assertNotIn("--data-mount", argv)
+        self.assertNotIn("--workspace", argv)
+        self.assertNotIn("--resume-workspace", argv)
+        self.assertIn("--no-memory", argv)
+        self.assertNotIn("--session", argv)
+
+    def test_autonomics_gateway_uses_fresh_session_and_virtual_paths(self) -> None:
+        captured: dict[str, object] = {}
+
+        class StubAutonomicsSolver(AutonomicsTuiSolver):
+            async def solve_raw(
+                self,
+                prompt: str,
+                *,
+                task_id: str = "<raw>",
+                phase: str = "raw",
+                answer_type: str | None = None,
+                category: str | None = None,
+                has_image: bool = False,
+                working_directory: Path | None = None,
+                data_mount: Path | None = None,
+                workspace: Path | None = None,
+                resume_workspace: bool = False,
+                session_id: str | None = None,
+            ) -> SolverResult:
+                captured.update(
+                    {
+                        "prompt": prompt,
+                        "workspace": workspace,
+                    }
+                )
+                assert workspace is not None
+                (workspace / "answer.txt").write_text(
+                    "gateway answer", encoding="utf-8"
+                )
+                (workspace / "trace.md").write_text("gateway trace", encoding="utf-8")
+                return SolverResult("final message", True)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.txt"
+            source.write_text("input", encoding="utf-8")
+            example = Example(
+                id="task-1",
+                question="Question",
+                image="",
+                target="A",
+                answer_type="multipleChoice",
+                category="Test",
+                assets=(
+                    TaskAsset(
+                        "input",
+                        source,
+                        relative_path="data/input.txt",
+                    ),
+                ),
+            )
+            solver = StubAutonomicsSolver(
+                Path("/usr/bin/autonomics"),
+                timeout=5,
+                use_gateway=True,
+            )
+
+            with (
+                patch(
+                    "bench_engine.solvers.autonomics_solver.ensure_headless_holder",
+                ) as ensure_holder,
+                patch(
+                    "bench_engine.solvers.autonomics_solver.virtual_path",
+                    side_effect=lambda path: f"/virtual/{path.name}",
+                ),
+            ):
+                result = asyncio.run(
+                    solver.solve(
+                        example,
+                        "prompt",
+                        data_mount_path=root / "mounts",
+                    )
+                )
+
+            ensure_holder.assert_called_once_with(
+                Path("/usr/bin/autonomics"),
+                profile=None,
+                model=None,
+            )
+            prompt = str(captured["prompt"])
+            self.assertIn("resident Autonomics gateway VFS", prompt)
+            self.assertIn("/virtual/data", prompt)
+            self.assertIn("/virtual/work/answer.txt", prompt)
+
+        self.assertEqual(result.response, "gateway answer")
+        self.assertEqual(sorted(result.artifacts), ["answer", "trace"])
 
     def test_autonomics_collects_answer_and_trace_artifacts(self) -> None:
         captured: dict[str, object] = {}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Sequence
@@ -24,6 +25,9 @@ from bench_engine.core.interfaces import (
 )
 
 RESULT_SCHEMA = 3
+RUBRIC_SCORE_DETAIL = re.compile(
+    r"(?im)\bscore\s*=\s*(\d+(?:\.\d+)?)\s*/\s*100"
+)
 
 
 class OpenAIGrader:
@@ -51,10 +55,10 @@ class OpenAIGrader:
         self,
         benchmark: Benchmark,
         example: Example,
-        response: str,
+        solver_result: SolverResult,
     ) -> Grade:
         del benchmark
-        prompt = self.benchmark.grader_prompt(example, response)
+        prompt = self.benchmark.grader_prompt(example, solver_result.response)
         try:
             result = await self.client.responses.create(
                 model=self.model,
@@ -72,7 +76,7 @@ class OpenAIGrader:
                 "model",
                 f"could not parse grader verdict: {text[-500:] if text else '<empty>'}",
             )
-        extracted = self.benchmark.extract(response, example)
+        extracted = self.benchmark.extract(solver_result.response, example)
         return Grade(verdict, extracted, "model")
 
 
@@ -156,6 +160,22 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         record.get("grade_method") == "model" and record.get("correct") is None
         for record in records
     )
+    rubric_records = [
+        record for record in records if record.get("grade_method") == "rubric"
+    ]
+    rubric_scores = [
+        float(match.group(1))
+        for record in rubric_records
+        if (
+            match := RUBRIC_SCORE_DETAIL.search(
+                str(record.get("grade_detail") or "")
+            )
+        )
+        is not None
+    ]
+    rubric_correct = sum(
+        record.get("correct") is True for record in rubric_records
+    )
 
     by_answer_type: dict[str, Counter[str]] = defaultdict(Counter)
     by_category: dict[str, Counter[str]] = defaultdict(Counter)
@@ -177,6 +197,15 @@ def summarize(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "incorrect": len(scored) - correct,
         "unscored": len(records) - len(scored),
         "accuracy": correct / len(scored) if scored else None,
+        "rubric_scored": len(rubric_scores),
+        "rubric_average_score": (
+            sum(rubric_scores) / len(rubric_scores) if rubric_scores else None
+        ),
+        "rubric_min_score": min(rubric_scores) if rubric_scores else None,
+        "rubric_max_score": max(rubric_scores) if rubric_scores else None,
+        "rubric_pass_rate": (
+            rubric_correct / len(rubric_records) if rubric_records else None
+        ),
         "solver_errors": solver_errors,
         "grader_errors": grader_errors,
         "by_answer_type": dict(by_answer_type),
@@ -225,7 +254,7 @@ async def evaluate_examples(
             if grader is None:
                 grade = benchmark.grade(solver_result.response, example)
             else:
-                grade = await grader.grade(benchmark, example, solver_result.response)
+                grade = await grader.grade(benchmark, example, solver_result)
             record = _result_record(
                 benchmark,
                 example,

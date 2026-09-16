@@ -41,8 +41,8 @@ uv run bench-engine evaluate \
 可用 `--autonomics PATH`（兼容 `--tui PATH`）、`BENCH_ENGINE_AUTONOMICS` 或兼容的
 `BENCH_ENGINE_TUI` 覆盖。
 
-传入 `--data-mount-path` 后，Autonomics 以 `--ephemeral --backend in-process`
-启动，并把每个 task 挂载为：
+默认情况下，传入 `--data-mount-path` 后，Autonomics 以
+`--ephemeral --backend in-process` 启动，并把每个 task 挂载为：
 
 ```text
 /data  # read-only benchmark inputs
@@ -51,6 +51,15 @@ uv run bench-engine evaluate \
 
 如果 agent 生成 `/app/answer.txt`，Bench Engine 会优先把它作为最终响应；
 `/app/answer.txt` 和 `/app/trace.md` 会记录到结果的 `solver_artifacts` 字段。
+
+也可以用 `--autonomics-gateway` 复用常驻 gateway：Bench Engine 会保持空闲的
+`/root/headless` holder 存活，使每次 gateway run 自动落到唯一的
+`headless-xxxxxxxx` fallback 身份并获得全新 session，同时以 `--no-memory`
+关闭 memory。由于 gateway run 目前不接受 per-run mount，`--data-mount-path`
+必须位于 gateway VFS 根挂载之下（本机是
+`/mnt/base/agent_workspace/smoke_vascular`），Bench Engine 会把对应的虚拟路径写进
+prompt 并继续从 host workspace 收集 artifacts。每个 task 使用独立 fallback agent，因此可配合
+`--jobs N` 并发执行。
 
 使用外部 solver：
 
@@ -168,6 +177,58 @@ release 的 1,967 道多选题：`cloning_scenarios`、`dbqa`、`figqa`、`litqa
 保存在各自 `data/` 下，TableQA 多表题会垂直合成一张图。LAB-Bench 源数据包含
 canary，不得用于训练。
 
+OmicOS-BiomniBench 是开放的数据分析任务集合；每个 task 都是 task package，
+`grading` 含 `method: "rubric"`、`answer_type: "rubric"`、`answer: null`、
+`rubric` 文本和 `pass_threshold`（0-1）。Task loader 接受 `pass_threshold` 或
+`threshold` 任一字段，并把 rubric / 阈值填充到 `Example.rubric` 与
+`Example.grade_threshold`：
+
+```bash
+uv run bench-engine datasets
+uv run bench-engine evaluate --benchmark omicos-biomnibench --limit 2 --dry-run
+```
+
+OmicOS 任务要求 solver 同时写 `/app/answer.txt` 与 `/app/trace.md`。Autonomics
+solver 自动收集这两个文件并放入 `solver_artifacts`；`answer.txt` 替换
+`solver_result.response`，`trace.md` 路径作为 `solver_artifacts["trace"]`。
+OmicOS 任务允许 `task.json` 把 `data` 声明为指向其他位置的目录符号链接，task
+loader 只在 `data/` 是符号链接且目标为目录时跳过 `data/` 子树约束，方便把大
+体积输入数据存放在共享目录里。
+
+OmicOS rubric 评分通过 `--grader omicos` 启用，需要配合 OpenAI 模型：
+
+```bash
+export OPENAI_API_KEY=...
+uv run bench-engine evaluate \
+  --benchmark omicos-biomnibench \
+  --limit 5 \
+  --grader omicos \
+  --grader-model <openai-model> \
+  --data-mount-path runs/solver-data \
+  --output runs/omicos.jsonl
+```
+
+复用常驻 gateway 的 `da-1-3` 烟测：
+
+```bash
+uv run bench-engine evaluate \
+  --benchmark omicos-biomnibench \
+  --question-id da-1-3 \
+  --grader omicos \
+  --autonomics-gateway \
+  --data-mount-path /mnt/base/agent_workspace/smoke_vascular/runs/bench-engine \
+  --jobs 5 \
+  --output /mnt/base/agent_workspace/smoke_vascular/runs/da-1-3-gateway.jsonl
+```
+
+`OmicOSGrader` 把 rubric 文本、threshold、`/app/answer.txt` 内容以及
+`/app/trace.md` 内容拼成一个评分 prompt，要求模型以 `Score: <0-100>` 一行
+结尾；得分 ≥ `pass_threshold * 100` 即视为通过，结果的 `grade_method` 为
+`"rubric"`，`grade_detail` 形如 `score=85/100 threshold=70/100 verdict=PASS`。
+`grade_method` 等于 `"exact"` 且无 rubric 时，CLI 会提示
+`rubric tasks require --grader omicos or --grader model`，避免误把空答案
+当作通过。
+
 TUI transport 目前只发送文本。默认不会把图像 data URI 放进 prompt；确要如此测试时，
 使用 `--include-image-uri`。图像必需题目建议改用支持多模态输入的 `--solver-command`。
 
@@ -198,7 +259,10 @@ uv run bench-engine evaluate \
 bench-engine evaluate
   -> cli.py
   -> benchmarks.hle.HLEBenchmark            # prompt + scoring adapter
+  -> benchmarks.omicos.OMICOS              # OmicOS-BiomniBench adapter
   -> core.runner.evaluate_examples          # concurrency, artifacts, metrics
+  -> grading.omicos.OmicOSGrader            # rubric scoring for --grader omicos
+  -> core.runner.OpenAIGrader              # generic --grader model
   -> solvers.custom.CustomCommandSolver     # --solver-command
   -> solvers.autonomics_solver.AutonomicsTuiSolver
 ```
