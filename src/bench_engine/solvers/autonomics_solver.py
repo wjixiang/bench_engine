@@ -30,6 +30,66 @@ def _agent_name(task_id: str) -> str:
     return f"be_{stem}_{secrets.token_hex(4)}"
 
 
+def _parse_run_events(stdout_text: str) -> dict[str, Any]:
+    """Extract stable metadata and telemetry from Autonomics JSONL events."""
+    session_id: str | None = None
+    model: str | None = None
+    usage: dict[str, Any] | None = None
+    telemetry: dict[str, Any] | None = None
+    telemetry_events: list[dict[str, Any]] = []
+    run_metrics: dict[str, Any] = {}
+
+    for line in stdout_text.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+
+        session_id = event.get("session_id") or session_id
+        model = event.get("model") or model
+        if isinstance(event.get("usage"), dict):
+            usage = event["usage"]
+
+        event_type = event.get("type")
+        event_telemetry = event.get("telemetry")
+        if isinstance(event_telemetry, dict):
+            telemetry = event_telemetry
+            telemetry_event: dict[str, Any] = {
+                "event_type": event_type,
+                "telemetry": event_telemetry,
+            }
+            for field in ("turn_id", "message", "status"):
+                if field in event:
+                    telemetry_event[field] = event[field]
+            telemetry_events.append(telemetry_event)
+
+        if event_type == "run.started":
+            for field in ("run_id", "agent_id", "session_id", "profile", "model"):
+                if field in event:
+                    run_metrics[field] = event[field]
+        elif event_type == "run.ended":
+            for field in (
+                "run_id",
+                "status",
+                "wall_time_secs",
+                "turns",
+                "tool_calls",
+            ):
+                if field in event:
+                    run_metrics[field] = event[field]
+
+    return {
+        "session_id": session_id,
+        "model": model,
+        "usage": usage,
+        "telemetry": telemetry,
+        "telemetry_events": telemetry_events,
+        "run_metrics": run_metrics,
+    }
+
+
 def _tail(text: str, limit: int = 4000) -> str:
     return text[-limit:]
 
@@ -206,18 +266,13 @@ class AutonomicsTuiSolver(Solver):
 
             stdout_text = stdout.decode("utf-8", errors="replace")
             stderr_text = stderr.decode("utf-8", errors="replace")
-            session_id: str | None = None
-            model: str | None = self.model
-            usage: dict[str, Any] | None = None
-            for line in stdout_text.splitlines():
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                session_id = event.get("session_id") or session_id
-                model = event.get("model") or model
-                if isinstance(event.get("usage"), dict):
-                    usage = event["usage"]
+            event_data = _parse_run_events(stdout_text)
+            session_id = event_data["session_id"]
+            model = event_data["model"] or self.model
+            usage = event_data["usage"]
+            telemetry = event_data["telemetry"]
+            telemetry_events = event_data["telemetry_events"]
+            run_metrics = event_data["run_metrics"]
 
             manifest_data: dict[str, Any] = {}
             try:
@@ -227,6 +282,22 @@ class AutonomicsTuiSolver(Solver):
             session_id = manifest_data.get("session_id") or session_id
             model = manifest_data.get("model") or model
             usage = manifest_data.get("usage") or usage
+            if isinstance(manifest_data.get("telemetry"), dict):
+                telemetry = manifest_data["telemetry"]
+            for field in (
+                "run_id",
+                "created_at",
+                "prompt_hash",
+                "profile",
+                "model",
+                "agent_path",
+                "status",
+                "turns",
+                "tool_calls",
+                "wall_time_secs",
+            ):
+                if field in manifest_data:
+                    run_metrics[field] = manifest_data[field]
 
             response = ""
             try:
@@ -265,6 +336,9 @@ class AutonomicsTuiSolver(Solver):
                 usage=usage,
                 stderr_tail=_tail(stderr_text),
                 agent_name=agent_name,
+                telemetry=telemetry,
+                telemetry_events=telemetry_events,
+                run_metrics=run_metrics,
             )
             self._log_end(
                 task_id,

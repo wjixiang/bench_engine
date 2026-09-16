@@ -79,6 +79,9 @@ class SolverResult:
     stderr_tail: str = ""
     artifacts: dict[str, str] = field(default_factory=dict)
     agent_name: str | None = None
+    telemetry: dict[str, Any] | None = None
+    telemetry_events: list[dict[str, Any]] = field(default_factory=list)
+    run_metrics: dict[str, Any] | None = None
 
 
 class Solver(Protocol):

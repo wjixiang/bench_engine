@@ -65,6 +65,14 @@ class OOMSolver(Solver):
             -9,
             error="Autonomics killed by OOM",
             agent_name="be_q1_oom",
+            telemetry={"total_tokens": 17, "total_tool_use": 2},
+            telemetry_events=[
+                {
+                    "event_type": "run.ended",
+                    "telemetry": {"total_tokens": 17},
+                }
+            ],
+            run_metrics={"status": "failed", "turns": 1},
         )
 
 
@@ -123,6 +131,10 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(set(skipped), {EXAMPLE.id})
             self.assertEqual(skipped[EXAMPLE.id]["agent_name"], "be_q1_oom")
             self.assertEqual(skipped[EXAMPLE.id]["returncode"], -9)
+            self.assertEqual(skipped[EXAMPLE.id]["telemetry"]["total_tokens"], 17)
+            self.assertEqual(
+                skipped[EXAMPLE.id]["run_metrics"]["status"], "failed"
+            )
 
     def test_oom_detection_distinguishes_sigkill_from_other_failures(self) -> None:
         self.assertTrue(is_oom_result(SolverResult("", False, -9)))

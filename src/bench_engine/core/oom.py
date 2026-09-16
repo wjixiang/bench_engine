@@ -83,6 +83,9 @@ def record_oom_skip(
         "returncode": solver_result.returncode,
         "agent_name": solver_result.agent_name,
         "error": solver_result.error,
+        "telemetry": solver_result.telemetry,
+        "telemetry_events": solver_result.telemetry_events,
+        "run_metrics": solver_result.run_metrics,
     }
     record.update(
         {

@@ -117,6 +117,9 @@ def _result_record(
         "solver_stderr_tail": solver_result.stderr_tail,
         "solver_artifacts": solver_result.artifacts,
         "solver_agent_name": solver_result.agent_name,
+        "solver_telemetry": solver_result.telemetry,
+        "solver_telemetry_events": solver_result.telemetry_events,
+        "solver_run_metrics": solver_result.run_metrics,
     }
 
 

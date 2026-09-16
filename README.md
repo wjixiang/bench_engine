@@ -265,6 +265,12 @@ gateway、solver frontend 和工具进程位于同一个 `KillMode=control-group
 评分结果。主结果中的 `solver_agent_name` 记录实际传给 Autonomics 的
 `--name`，便于把 OOM sidecar 和具体 agent 对齐。
 
+Autonomics headless 的 telemetry 会随结果完整保留：`solver_telemetry` 是
+manifest 中的权威汇总，`solver_telemetry_events` 保留 `turn.completed`、
+`turn.failed` 和 `run.ended` 事件中的终端 telemetry 快照，
+`solver_run_metrics` 保留 run id、状态、耗时、turn 数、tool call 数和 prompt hash
+等运行元数据。这些字段同样会写入 OOM skip sidecar，方便定位资源消耗异常的任务。
+
 ## 架构
 
 ```text

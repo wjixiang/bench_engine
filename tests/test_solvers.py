@@ -1,19 +1,88 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from bench_engine.core.interfaces import Example, SolverResult, TaskAsset
-from bench_engine.solvers.autonomics_solver import AutonomicsTuiSolver
+from bench_engine.solvers.autonomics_solver import (
+    AutonomicsTuiSolver,
+    _parse_run_events,
+)
 from bench_engine.solvers.custom import CustomCommandSolver
 from bench_engine.solvers.mounting import mount_example_data
 from tests.test_core import EXAMPLE
 
 
 class SolverTest(unittest.TestCase):
+    def test_autonomics_event_parser_preserves_telemetry(self) -> None:
+        stdout = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "run.started",
+                        "run_id": "run-1",
+                        "agent_id": "agent-1",
+                        "session_id": "session-1",
+                        "profile": "researcher",
+                        "model": "test-model",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn.completed",
+                        "turn_id": "turn-1",
+                        "usage": {"input_tokens": 11, "output_tokens": 6},
+                        "telemetry": {
+                            "input_tokens": 11,
+                            "output_tokens": 6,
+                            "total_tokens": 17,
+                            "llm_call_count": 1,
+                            "total_tool_use": 2,
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "run.ended",
+                        "run_id": "run-1",
+                        "status": "completed",
+                        "wall_time_secs": 1.25,
+                        "turns": 1,
+                        "tool_calls": 2,
+                        "telemetry": {
+                            "input_tokens": 11,
+                            "output_tokens": 6,
+                            "total_tokens": 17,
+                            "llm_call_count": 1,
+                            "total_tool_use": 2,
+                            "time_consume_ms": 1250,
+                        },
+                    }
+                ),
+            ]
+        )
+
+        parsed = _parse_run_events(stdout)
+
+        self.assertEqual(parsed["session_id"], "session-1")
+        self.assertEqual(parsed["model"], "test-model")
+        self.assertEqual(parsed["usage"]["input_tokens"], 11)
+        self.assertEqual(parsed["telemetry"]["time_consume_ms"], 1250)
+        self.assertEqual(parsed["run_metrics"]["status"], "completed")
+        self.assertEqual(parsed["run_metrics"]["turns"], 1)
+        self.assertEqual(parsed["run_metrics"]["tool_calls"], 2)
+        self.assertEqual(
+            [event["event_type"] for event in parsed["telemetry_events"]],
+            ["turn.completed", "run.ended"],
+        )
+        self.assertEqual(
+            parsed["telemetry_events"][0]["telemetry"]["total_tool_use"], 2
+        )
+
     def test_custom_solver_success_and_logs(self) -> None:
         command = "python -c 'import sys; sys.stdin.read(); print(\"Answer: 4\")'"
         solver = CustomCommandSolver(command, timeout=5)
