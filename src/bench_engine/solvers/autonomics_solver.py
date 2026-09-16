@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import secrets
 import tempfile
 import time
 from dataclasses import replace
@@ -12,11 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from bench_engine.core.interfaces import Example, Solver, SolverResult
-from bench_engine.solvers.gateway import (
-    GatewayError,
-    ensure_headless_holder,
-    virtual_path,
-)
+from bench_engine.solvers.gateway import GatewayError, virtual_path
 from bench_engine.solvers.mounting import mount_example_data
 
 DEFAULT_AUTONOMICS = Path(
@@ -25,6 +23,12 @@ DEFAULT_AUTONOMICS = Path(
 # Kept for callers that still import the old name.
 DEFAULT_TUI = DEFAULT_AUTONOMICS
 logger = logging.getLogger(__name__)
+
+
+def _agent_name(task_id: str) -> str:
+    """Build a fresh, gateway-safe agent name for one benchmark task."""
+    stem = re.sub(r"[^a-z0-9_]+", "_", task_id.lower()).strip("_")[:20] or "task"
+    return f"be_{stem}_{secrets.token_hex(4)}"
 
 
 def _tail(text: str, limit: int = 4000) -> str:
@@ -72,18 +76,13 @@ class AutonomicsTuiSolver(Solver):
             resume_workspace = any(workspace.iterdir())
             if self.use_gateway:
                 try:
-                    ensure_headless_holder(
-                        self.executable,
-                        profile=self.profile,
-                        model=self.model,
-                    )
                     virtual_data = virtual_path(mounted_data)
                     virtual_workspace = virtual_path(workspace)
                 except GatewayError as exc:
                     return SolverResult(
                         "",
                         False,
-                        error=f"failed to prepare gateway benchmark holder: {exc}",
+                        error=f"failed to map gateway benchmark paths: {exc}",
                     )
                 prompt += (
                     "\n\nThis run uses the resident Autonomics gateway VFS.\n"
@@ -140,7 +139,7 @@ class AutonomicsTuiSolver(Solver):
             task_id,
             phase,
             self.executable,
-            "gateway" if self.use_gateway else "ephemeral",
+            "gateway-vfs" if self.use_gateway else "gateway-host-paths",
             self.model or "<active>",
             self.timeout,
             len(prompt),
@@ -160,13 +159,7 @@ class AutonomicsTuiSolver(Solver):
         with tempfile.TemporaryDirectory(prefix="bench-engine-tui-") as directory:
             output = Path(directory) / "last-message.txt"
             manifest = Path(directory) / "manifest.json"
-            argv = self._build_argv(
-                output,
-                manifest,
-                data_mount=data_mount,
-                workspace=workspace,
-                resume_workspace=resume_workspace,
-            )
+            argv = self._build_argv(output, manifest, task_id=task_id)
 
             logger.info("autonomics.spawn id=%s phase=%s argv=%s", task_id, phase, argv)
             try:
@@ -284,9 +277,7 @@ class AutonomicsTuiSolver(Solver):
         output: Path,
         manifest: Path,
         *,
-        data_mount: Path | None,
-        workspace: Path | None,
-        resume_workspace: bool,
+        task_id: str = "<raw>",
     ) -> list[str]:
         argv = [
             str(self.executable),
@@ -299,16 +290,7 @@ class AutonomicsTuiSolver(Solver):
             "--manifest",
             str(manifest),
         ]
-        if self.use_gateway:
-            argv.append("--no-memory")
-        else:
-            argv.extend(("--ephemeral", "--backend", "in-process"))
-            if data_mount is not None:
-                argv.extend(("--data-mount", f"{data_mount}=/data"))
-            if workspace is not None:
-                argv.extend(("--workspace", f"{workspace}=/app"))
-            if resume_workspace:
-                argv.append("--resume-workspace")
+        argv.extend(("--name", _agent_name(task_id), "--no-memory"))
         if self.model is not None:
             argv.extend(("--model", self.model))
         if self.profile is not None:

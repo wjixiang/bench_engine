@@ -56,6 +56,34 @@ def _make_example(tmp: Path) -> Example:
 
 
 class OmicOSAdapterTest(unittest.TestCase):
+    def test_codex_local_grader_has_real_runner(self) -> None:
+        from bench_engine.grading.codex_local import CodexLocalGrader
+
+        grader = CodexLocalGrader()
+        self.assertTrue(callable(grader._run_codex))
+
+    def test_codex_local_grader_timeout_is_scored_as_unscored(self) -> None:
+        from bench_engine.grading.codex_local import CodexLocalGrader
+
+        example = Example(
+            id="timeout-test",
+            question="Q?",
+            image="",
+            target="",
+            answer_type="rubric",
+            category="test",
+            rubric="RUBRIC\nCriterion 1: Test.",
+        )
+        grader = CodexLocalGrader(timeout=1)
+
+        async def timeout_run(argv, prompt, *, timeout):
+            raise TimeoutError
+
+        grader._run_codex = timeout_run  # type: ignore[method-assign]
+        grade = asyncio.run(grader.grade(object(), example, SolverResult("A", True)))
+        self.assertIsNone(grade.correct)
+        self.assertIn("timed out after 1s", grade.detail)
+
     def test_prompt_includes_answer_trace_directives(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             example = _make_example(Path(directory))

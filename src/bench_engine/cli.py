@@ -180,10 +180,10 @@ def evaluate(
     autonomics_gateway: Annotated[
         bool,
         typer.Option(
-            "--autonomics-gateway/--autonomics-ephemeral",
+            "--autonomics-gateway/--no-autonomics-gateway",
             help=(
-                "Reuse the resident Autonomics gateway (one fresh fallback identity "
-                "per task) or run isolated in-process Autonomics processes."
+                "Use gateway VFS paths for mounted task data (all Autonomics runs "
+                "now connect to the resident gateway)."
             ),
         ),
     ] = False,
@@ -269,14 +269,20 @@ def evaluate(
             datefmt="%H:%M:%S",
             force=True,
         )
-    if autonomics_gateway:
-        if solver_command is not None:
+    if solver_command is not None:
+        if autonomics_gateway:
             raise typer.BadParameter(
                 "--autonomics-gateway cannot be combined with --solver-command"
             )
-        if data_mount_path is None:
+    else:
+        if autonomics_gateway and data_mount_path is None:
             raise typer.BadParameter(
                 "--autonomics-gateway requires --data-mount-path under the gateway VFS root"
+            )
+        if data_mount_path is not None and not autonomics_gateway:
+            raise typer.BadParameter(
+                "--data-mount-path requires --autonomics-gateway with the current "
+                "Autonomics name-based gateway CLI"
             )
 
     base_benchmark = HLE

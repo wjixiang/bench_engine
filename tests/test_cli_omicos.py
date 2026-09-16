@@ -200,6 +200,32 @@ class CLIOmicOSTest(unittest.TestCase):
         self.assertIn("requires --data-mount-path", missing_mount.output)
         self.assertEqual(concurrent.exit_code, 0, concurrent.output)
 
+    def test_data_mount_requires_gateway_vfs_mode(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"BENCH_ENGINE_DATA_DIR": str(_write_dataset(Path("/tmp/omicos-cli6")))},
+            clear=True,
+        ):
+            from bench_engine.core import data as data_module
+
+            data_module.DATASET_ROOT = Path("/tmp/omicos-cli6")
+            result = self.runner.invoke(
+                cli.app,
+                [
+                    "evaluate",
+                    "--benchmark",
+                    "omicos-biomnibench",
+                    "--limit",
+                    "1",
+                    "--dry-run",
+                    "--data-mount-path",
+                    "/tmp/omicos-cli6/mounts",
+                ],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("--data-mount-path requires --autonomics-gateway", result.output)
+
 
 if __name__ == "__main__":
     unittest.main()

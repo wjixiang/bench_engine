@@ -39,7 +39,7 @@ class SolverTest(unittest.TestCase):
         error = result.error
         self.assertTrue(error is not None and "does not exist" in error)
 
-    def test_autonomics_command_uses_ephemeral_vfs_mounts(self) -> None:
+    def test_autonomics_command_uses_a_unique_named_agent(self) -> None:
         solver = AutonomicsTuiSolver(
             Path("/usr/bin/autonomics"),
             timeout=123,
@@ -50,42 +50,25 @@ class SolverTest(unittest.TestCase):
         argv = solver._build_argv(
             Path("/tmp/last-message.txt"),
             Path("/tmp/manifest.json"),
-            data_mount=Path("/mounts/task/data"),
-            workspace=Path("/mounts/task/work"),
-            resume_workspace=True,
+            task_id="DA-1/3",
         )
 
-        self.assertIn("--backend", argv)
-        self.assertEqual(argv[argv.index("--backend") + 1], "in-process")
-        self.assertIn("--data-mount", argv)
-        self.assertEqual(
-            argv[argv.index("--data-mount") + 1],
-            "/mounts/task/data=/data",
-        )
-        self.assertIn("--workspace", argv)
-        self.assertEqual(
-            argv[argv.index("--workspace") + 1],
-            "/mounts/task/work=/app",
-        )
-        self.assertIn("--resume-workspace", argv)
-        self.assertEqual(argv[-1], "-")
-
-    def test_autonomics_gateway_argv_avoids_mounts_and_persistent_session(self) -> None:
-        solver = AutonomicsTuiSolver(
-            Path("/usr/bin/autonomics"),
-            timeout=123,
-            model="provider:model",
-            profile=Path("researcher"),
-            use_gateway=True,
-        )
-
-        argv = solver._build_argv(
+        name = argv[argv.index("--name") + 1]
+        second = solver._build_argv(
             Path("/tmp/last-message.txt"),
             Path("/tmp/manifest.json"),
-            data_mount=Path("/gateway-vfs/task/data"),
-            workspace=Path("/gateway-vfs/task/work"),
-            resume_workspace=True,
-        )
+            task_id="DA-1/3",
+        )[argv.index("--name") + 1]
+        self.assertRegex(name, r"^be_da_1_3_[0-9a-f]{8}$")
+        self.assertNotEqual(name, second)
+
+        long_name = solver._build_argv(
+            Path("/tmp/last-message.txt"),
+            Path("/tmp/manifest.json"),
+            task_id="a" * 100,
+        )[argv.index("--name") + 1]
+        self.assertLessEqual(len(long_name), 32)
+        self.assertTrue(long_name.startswith("be_aaaaaaaaaaaaaaaaaaaa_"))
 
         self.assertNotIn("--ephemeral", argv)
         self.assertNotIn("--backend", argv)
@@ -93,7 +76,7 @@ class SolverTest(unittest.TestCase):
         self.assertNotIn("--workspace", argv)
         self.assertNotIn("--resume-workspace", argv)
         self.assertIn("--no-memory", argv)
-        self.assertNotIn("--session", argv)
+        self.assertEqual(argv[-1], "-")
 
     def test_autonomics_gateway_uses_fresh_session_and_virtual_paths(self) -> None:
         captured: dict[str, object] = {}
@@ -152,14 +135,9 @@ class SolverTest(unittest.TestCase):
                 use_gateway=True,
             )
 
-            with (
-                patch(
-                    "bench_engine.solvers.autonomics_solver.ensure_headless_holder",
-                ) as ensure_holder,
-                patch(
-                    "bench_engine.solvers.autonomics_solver.virtual_path",
-                    side_effect=lambda path: f"/virtual/{path.name}",
-                ),
+            with patch(
+                "bench_engine.solvers.autonomics_solver.virtual_path",
+                side_effect=lambda path: f"/virtual/{path.name}",
             ):
                 result = asyncio.run(
                     solver.solve(
@@ -169,11 +147,6 @@ class SolverTest(unittest.TestCase):
                     )
                 )
 
-            ensure_holder.assert_called_once_with(
-                Path("/usr/bin/autonomics"),
-                profile=None,
-                model=None,
-            )
             prompt = str(captured["prompt"])
             self.assertIn("resident Autonomics gateway VFS", prompt)
             self.assertIn("/virtual/data", prompt)

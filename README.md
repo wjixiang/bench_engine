@@ -32,8 +32,9 @@ uv run bench-engine evaluate \
   --benchmark hle-biomedical \
   --limit 5 \
   --model provider:model-name \
-  --data-mount-path runs/solver-data \
-  --output runs/biomedical.jsonl
+  --autonomics-gateway \
+  --data-mount-path /mnt/base/agent_workspace/smoke_vascular/runs/bench-engine/biomedical-demo \
+  --output /mnt/base/agent_workspace/smoke_vascular/runs/biomedical.jsonl
 ```
 
 默认 executable 是
@@ -41,25 +42,18 @@ uv run bench-engine evaluate \
 可用 `--autonomics PATH`（兼容 `--tui PATH`）、`BENCH_ENGINE_AUTONOMICS` 或兼容的
 `BENCH_ENGINE_TUI` 覆盖。
 
-默认情况下，传入 `--data-mount-path` 后，Autonomics 以
-`--ephemeral --backend in-process` 启动，并把每个 task 挂载为：
+Autonomics CLI 现在总是连接/启动 resident gateway，并通过 `--name` 为每个 task
+创建一个全新的 agent（例如 `be_da_1_3_0f1e2d3c`）。Agent name 只包含小写字母、
+数字和下划线，且不超过 Autonomics 的 32 字符限制。
 
-```text
-/data  # read-only benchmark inputs
-/app   # writable benchmark workspace
-```
-
-如果 agent 生成 `/app/answer.txt`，Bench Engine 会优先把它作为最终响应；
-`/app/answer.txt` 和 `/app/trace.md` 会记录到结果的 `solver_artifacts` 字段。
-
-也可以用 `--autonomics-gateway` 复用常驻 gateway：Bench Engine 会保持空闲的
-`/root/headless` holder 存活，使每次 gateway run 自动落到唯一的
-`headless-xxxxxxxx` fallback 身份并获得全新 session，同时以 `--no-memory`
-关闭 memory。由于 gateway run 目前不接受 per-run mount，`--data-mount-path`
-必须位于 gateway VFS 根挂载之下（本机是
-`/mnt/base/agent_workspace/smoke_vascular`），Bench Engine 会把对应的虚拟路径写进
-prompt 并继续从 host workspace 收集 artifacts。每个 task 使用独立 fallback agent，因此可配合
-`--jobs N` 并发执行。
+传入 `--data-mount-path` 时，必须对使用 Autonomics 且带外部文件的 benchmark 追加
+`--autonomics-gateway`。Bench Engine 会把 task 数据和工作目录映射到 gateway
+VFS 中的 `/data` 与 `/app` 语义，并把对应虚拟路径写入 prompt。Host 侧仍从
+mount root 收集 `answer.txt` 和 `trace.md`；`answer.txt` 会优先作为最终响应。
+由于 run CLI 不再提供 per-process mount，`--data-mount-path` 必须位于 gateway
+VFS 根挂载之下（本机是
+`/mnt/base/agent_workspace/smoke_vascular`）。每个 task 使用独立 agent，因此可
+配合 `--jobs N` 并发执行，同时以 `--no-memory` 关闭 memory。
 
 使用外部 solver：
 
@@ -195,7 +189,10 @@ OmicOS 任务允许 `task.json` 把 `data` 声明为指向其他位置的目录�
 loader 只在 `data/` 是符号链接且目标为目录时跳过 `data/` 子树约束，方便把大
 体积输入数据存放在共享目录里。
 
-OmicOS rubric 评分通过 `--grader omicos` 启用，需要配合 OpenAI 模型：
+OmicOS rubric 评分可通过 `--grader omicos` 使用 OpenAI-compatible API，也可通过
+`--grader codex-local` 调用本机已登录的 headless Codex CLI。后者会读取
+`BENCH_ENGINE_CODEX` 指定的可执行文件（默认 `codex`），使用与 `OmicOSGrader`
+相同的 rubric prompt、分数范围和 pass threshold：
 
 ```bash
 export OPENAI_API_KEY=...
@@ -204,8 +201,9 @@ uv run bench-engine evaluate \
   --limit 5 \
   --grader omicos \
   --grader-model <openai-model> \
-  --data-mount-path runs/solver-data \
-  --output runs/omicos.jsonl
+  --autonomics-gateway \
+  --data-mount-path /mnt/base/agent_workspace/smoke_vascular/runs/bench-engine/omicos-demo \
+  --output /mnt/base/agent_workspace/smoke_vascular/runs/omicos.jsonl
 ```
 
 复用常驻 gateway 的 `da-1-3` 烟测：

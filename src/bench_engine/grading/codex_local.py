@@ -18,7 +18,6 @@ import logging
 import re
 import shutil
 import tempfile
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -100,34 +99,6 @@ def _parse_score(text: str) -> int | None:
 
 
 
-    async def _run_codex(
-        self,
-        argv: list[str],
-        prompt: str,
-        *,
-        timeout: float,
-    ) -> tuple[int, bytes, bytes]:
-        """Spawn ``codex exec`` and return ``(returncode, stdout, stderr)``.
-
-        Override this in tests to inject a fake process.
-        """
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(prompt.encode("utf-8")), timeout=timeout
-            )
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise
-        return proc.returncode, stdout, stderr
-
-
 def _build_structured_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -160,6 +131,33 @@ class CodexLocalGrader:
         self.timeout = timeout
         self.extra_args = list(extra_args or [])
 
+    async def _run_codex(
+        self,
+        argv: list[str],
+        prompt: str,
+        *,
+        timeout: float,
+    ) -> tuple[int, bytes, bytes]:
+        """Spawn ``codex exec`` and return ``(returncode, stdout, stderr)``.
+
+        Override this in tests to inject a fake process.
+        """
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(prompt.encode("utf-8")), timeout=timeout
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
+        return proc.returncode, stdout, stderr
+
     async def grade(
         self,
         benchmark: Benchmark,
@@ -185,16 +183,19 @@ class CodexLocalGrader:
             example.grade_threshold,
         )
 
-        # Write prompt to a temp file (avoid huge stdin in argv).
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, encoding="utf-8"
-        ) as prompt_handle:
-            prompt_handle.write(prompt)
-            prompt_path = Path(prompt_handle.name)
-
-        output_path = Path(tempfile.mkstemp(suffix=".txt", prefix="codex-grader-")[1])
-        schema_path = Path(tempfile.mkstemp(suffix=".json", prefix="codex-grader-")[1])
-        schema_path.write_text(json.dumps(_build_structured_schema()), encoding="utf-8")
+            mode="w", suffix=".txt", prefix="codex-grader-", delete=False
+        ) as output_handle:
+            output_path = Path(output_handle.name)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json",
+            prefix="codex-grader-",
+            delete=False,
+            encoding="utf-8",
+        ) as schema_handle:
+            json.dump(_build_structured_schema(), schema_handle)
+            schema_path = Path(schema_handle.name)
 
         argv: list[str] = [
             self.codex_path, "exec",
@@ -220,6 +221,13 @@ class CodexLocalGrader:
                     answer_text,
                     "rubric",
                     f"failed to launch codex: {exc}",
+                )
+            except TimeoutError:
+                return Grade(
+                    None,
+                    answer_text,
+                    "rubric",
+                    f"codex grader timed out after {self.timeout:g}s",
                 )
 
             if returncode != 0:
@@ -258,7 +266,7 @@ class CodexLocalGrader:
             )
             return Grade(correct, answer_text, "rubric", detail)
         finally:
-            for tmp in (prompt_path, output_path, schema_path):
+            for tmp in (output_path, schema_path):
                 try:
                     tmp.unlink()
                 except OSError:
