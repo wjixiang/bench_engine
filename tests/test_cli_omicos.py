@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -225,6 +226,47 @@ class CLIOmicOSTest(unittest.TestCase):
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("--data-mount-path requires --autonomics-gateway", result.output)
+
+    def test_resume_skips_tasks_in_oom_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = _write_dataset(Path(directory))
+            output = root / "results.jsonl"
+            output.write_text("", encoding="utf-8")
+            (root / "results.oom-skipped.jsonl").write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "id": "rubric-task",
+                        "source": "solver",
+                        "returncode": -9,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with patch.dict(
+                "os.environ",
+                {"BENCH_ENGINE_DATA_DIR": str(root)},
+                clear=True,
+            ):
+                from bench_engine.core import data as data_module
+
+                data_module.DATASET_ROOT = root
+                result = self.runner.invoke(
+                    cli.app,
+                    [
+                        "evaluate",
+                        "--benchmark",
+                        "omicos-biomnibench",
+                        "--dry-run",
+                        "--resume",
+                        "--output",
+                        str(output),
+                    ],
+                )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertNotIn("rubric-task", result.output)
 
 
 if __name__ == "__main__":

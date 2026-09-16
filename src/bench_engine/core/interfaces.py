@@ -78,6 +78,7 @@ class SolverResult:
     usage: dict[str, Any] | None = None
     stderr_tail: str = ""
     artifacts: dict[str, str] = field(default_factory=dict)
+    agent_name: str | None = None
 
 
 class Solver(Protocol):

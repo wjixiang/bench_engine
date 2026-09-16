@@ -23,6 +23,7 @@ from bench_engine.core.interfaces import (
     Solver,
     SolverResult,
 )
+from bench_engine.core.oom import is_oom_result, record_oom_skip
 
 RESULT_SCHEMA = 3
 RUBRIC_SCORE_DETAIL = re.compile(
@@ -115,6 +116,7 @@ def _result_record(
         "solver_usage": solver_result.usage,
         "solver_stderr_tail": solver_result.stderr_tail,
         "solver_artifacts": solver_result.artifacts,
+        "solver_agent_name": solver_result.agent_name,
     }
 
 
@@ -225,6 +227,7 @@ async def evaluate_examples(
     skip_ids: set[str] | None = None,
     dry_run: bool = False,
     data_mount_path: Path | None = None,
+    oom_skip_file: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Run all examples and append one JSON object per completed item."""
     skip = skip_ids or set()
@@ -251,10 +254,25 @@ async def evaluate_examples(
                 benchmark.prompt(example),
                 data_mount_path=data_mount_path,
             )
+            if oom_skip_file is not None and is_oom_result(solver_result):
+                skip_record = record_oom_skip(
+                    oom_skip_file,
+                    example,
+                    solver_result,
+                )
+                print(
+                    f"id={example.id} skipped_after_oom "
+                    f"agent={skip_record.get('agent_name') or '<unknown>'} "
+                    f"returncode={solver_result.returncode}",
+                    file=sys.stderr,
+                )
+                return
+
             if grader is None:
                 grade = benchmark.grade(solver_result.response, example)
             else:
                 grade = await grader.grade(benchmark, example, solver_result)
+
             record = _result_record(
                 benchmark,
                 example,

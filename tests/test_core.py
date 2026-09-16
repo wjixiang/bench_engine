@@ -16,6 +16,7 @@ from openai import OpenAIError
 from bench_engine.benchmarks.hle import HLE
 from bench_engine.core.grading import exact_grade, grade_verdict
 from bench_engine.core.interfaces import Example, Solver, SolverResult, TaskAsset
+from bench_engine.core.oom import is_oom_result, read_oom_skips
 from bench_engine.core.runner import OpenAIGrader, evaluate_examples, summarize
 
 EXAMPLE = Example(
@@ -50,6 +51,23 @@ class StaticSolver(Solver):
         return SolverResult("work\nAnswer: 4", True)
 
 
+class OOMSolver(Solver):
+    async def solve(
+        self,
+        example: Example,
+        prompt: str,
+        *,
+        data_mount_path: Path | None = None,
+    ) -> SolverResult:
+        return SolverResult(
+            "",
+            False,
+            -9,
+            error="Autonomics killed by OOM",
+            agent_name="be_q1_oom",
+        )
+
+
 class CoreTest(unittest.TestCase):
     def test_grading_and_verdicts(self) -> None:
         self.assertEqual(HLE.extract("Answer: **(B)**", MC_EXAMPLE), "B")
@@ -82,6 +100,47 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(record["solver_artifacts"], {})
         self.assertEqual(summarize(records)["accuracy"], 1.0)
         self.assertIsNotNone(solver.data_mount_path)
+
+    def test_oom_failure_is_recorded_as_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "results.jsonl"
+            oom_skip = Path(directory) / "results.oom-skipped.jsonl"
+            records = asyncio.run(
+                evaluate_examples(
+                    HLE,
+                    [EXAMPLE],
+                    OOMSolver(),
+                    solver_kind="test",
+                    output=output,
+                    grader=None,
+                    oom_skip_file=oom_skip,
+                )
+            )
+
+            self.assertEqual(records, [])
+            self.assertFalse(output.exists())
+            skipped = read_oom_skips(oom_skip)
+            self.assertEqual(set(skipped), {EXAMPLE.id})
+            self.assertEqual(skipped[EXAMPLE.id]["agent_name"], "be_q1_oom")
+            self.assertEqual(skipped[EXAMPLE.id]["returncode"], -9)
+
+    def test_oom_detection_distinguishes_sigkill_from_other_failures(self) -> None:
+        self.assertTrue(is_oom_result(SolverResult("", False, -9)))
+        self.assertTrue(
+            is_oom_result(
+                SolverResult(
+                    "",
+                    False,
+                    1,
+                    stderr_tail="Memory cgroup out of memory",
+                )
+            )
+        )
+        self.assertFalse(
+            is_oom_result(
+                SolverResult("", False, 1, error="invalid model configuration")
+            )
+        )
 
     def test_summary_exposes_rubric_scores_separately_from_binary_accuracy(self) -> None:
         record = {

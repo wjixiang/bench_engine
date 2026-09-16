@@ -27,6 +27,7 @@ from bench_engine.core.data import (
     load_examples,
 )
 from bench_engine.core.interfaces import Example
+from bench_engine.core.oom import read_oom_skips
 from bench_engine.core.runner import (
     OpenAIGrader,
     completed_ids,
@@ -238,6 +239,16 @@ def evaluate(
         bool,
         typer.Option("--resume/--no-resume", help="Skip IDs already in --output."),
     ] = False,
+    oom_skip_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--oom-skip-file",
+            help=(
+                "Durable JSONL sidecar of OOM-killed task IDs to skip on resume; "
+                "defaults to <output>.oom-skipped.jsonl."
+            ),
+        ),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -358,6 +369,11 @@ def evaluate(
         raise typer.Exit(code=1)
     if output is None:
         output = _default_output()
+    selected_oom_skip_file = (
+        oom_skip_file
+        if oom_skip_file is not None
+        else output.with_suffix(".oom-skipped.jsonl")
+    )
     if output.exists() and not resume and not dry_run:
         raise typer.BadParameter(
             f"output exists: {output}; use --resume to continue it or choose --output"
@@ -420,6 +436,8 @@ def evaluate(
 
     try:
         skip = completed_ids(output) if resume and output.exists() else set()
+        if resume:
+            skip.update(read_oom_skips(selected_oom_skip_file))
         asyncio.run(
             evaluate_examples(
                 run_benchmark,
@@ -436,6 +454,7 @@ def evaluate(
                     if data_mount_path is not None
                     else None
                 ),
+                oom_skip_file=selected_oom_skip_file,
             )
         )
         all_records = read_results(output)
@@ -450,6 +469,9 @@ def evaluate(
 
     summary_path = output.with_suffix(".summary.json") if summary is None else summary
     metrics = summarize(all_records)
+    oom_skips = read_oom_skips(selected_oom_skip_file)
+    metrics["oom_skipped"] = len(oom_skips)
+    metrics["oom_skipped_ids"] = sorted(oom_skips)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(
         json.dumps(metrics, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

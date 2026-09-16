@@ -251,6 +251,20 @@ uv run bench-engine evaluate \
 旁边生成 `.summary.json`。日志只包含 ID、耗时、返回码和元数据，不包含题目、图像、
 答案或模型响应。
 
+大规模 OmicOS 批量测试建议使用：
+
+```bash
+scripts/start_omicos_mass_gateway.sh
+journalctl --user -u bench-engine-omicos.service -f
+```
+
+该 launcher 会创建可自动重启的用户级 systemd service，限制整批内存，并让
+gateway、solver frontend 和工具进程位于同一个 `KillMode=control-group` cgroup。
+若某个 task 被内存回收终止，runner 会把 returncode `-9` 或明确 OOM 诊断写入
+`<output>.oom-skipped.jsonl`；下次 `--resume` 会跳过这些 task，且不会把它们计入
+评分结果。主结果中的 `solver_agent_name` 记录实际传给 Autonomics 的
+`--name`，便于把 OOM sidecar 和具体 agent 对齐。
+
 ## 架构
 
 ```text

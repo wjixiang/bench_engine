@@ -161,6 +161,7 @@ class AutonomicsTuiSolver(Solver):
             process_cwd = Path(directory) / "cwd"
             process_cwd.mkdir()
             argv = self._build_argv(output, manifest, task_id=task_id)
+            agent_name = argv[argv.index("--name") + 1]
 
             logger.info("autonomics.spawn id=%s phase=%s argv=%s", task_id, phase, argv)
             try:
@@ -263,6 +264,7 @@ class AutonomicsTuiSolver(Solver):
                 model=model,
                 usage=usage,
                 stderr_tail=_tail(stderr_text),
+                agent_name=agent_name,
             )
             self._log_end(
                 task_id,
